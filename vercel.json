@@ -21,7 +21,7 @@
       "destination": "/api/index.ts"
     },
     {
-      "source": "/((?!api/|assets/|src/assets/).*)",
+      "source": "/((?!api/|assets/|src/assets/|v2/).*)",
       "destination": "/index.html"
     }
   ]

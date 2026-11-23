@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<base href="/v2/">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mạch Ngôn V2 — Nền tảng học tư duy ngôn ngữ</title>
+<meta name="description" content="Mạch Ngôn: thư viện 87 bài đọc về văn học, ngôn ngữ, lập luận và AI Labs có AI phản biện theo phương pháp Socrates.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%236b2d3a%22/%3E%3Ctext x=%2232%22 y=%2242%22 font-size=%2226%22 text-anchor=%22middle%22 fill=%22%23fffaf2%22 font-family=%22Georgia%22%3EMN%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,600;1,400&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<a class="sr" href="#view">Bỏ qua điều hướng</a>
+<aside class="sidenav" id="sidenav" aria-label="Menu chính">
+  <a class="logo" href="#home" aria-label="Mạch Ngôn – Trang chủ"><img src="img/logo.png" alt="Logo Mạch Ngôn"><span class="lbl">MẠCH NGÔN</span></a>
+  <nav id="sideLinks"></nav>
+  <div id="sideUser" class="suser"></div>
+  <div class="sfoot">
+    <button class="slink" id="sSearch" aria-label="Tìm trong thư viện (phím /)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span class="lbl">Tìm kiếm</span></button>
+    <button class="slink" id="sTheme" aria-label="Đổi không gian đọc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><span class="lbl">Không gian đọc</span></button>
+    <button class="slink" id="sCollapse" aria-label="Thu gọn hoặc mở rộng menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 6l-6 6 6 6"/></svg><span class="lbl">Thu gọn menu</span></button>
+  </div>
+</aside>
+<header class="top">
+  <div class="wrap">
+    <a class="logo" href="#home" aria-label="Mạch Ngôn – Trang chủ"><img src="img/logo.png" alt="Logo Mạch Ngôn">MẠCH NGÔN</a>
+    <nav class="main" id="nav" aria-label="Điều hướng chính"></nav>
+    <div class="tools">
+      <button class="ib" id="searchBtn" aria-label="Tìm trong thư viện (phím /)" title="Tìm (/)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+      <button class="ib" id="themeBtn" aria-label="Đổi không gian đọc" title="Đổi không gian đọc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+      <a class="btn sm" id="userBtn" href="#auth">Đăng nhập</a>
+      <button class="ib" id="menuBtn" aria-label="Mở menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+    </div>
+  </div>
+</header>
+<div class="drawer" id="drawer" aria-hidden="true"><div class="panel" id="drawerPanel" role="dialog" aria-label="Menu"></div></div>
+<main id="view" tabindex="-1"></main>
+<nav class="bnav" id="bnav" aria-label="Điều hướng nhanh"></nav>
+<footer><div class="wrap row between">
+  <div>© 2026 Dự án <b>MẠCH NGÔN</b> · THPT Trần Phú, Bà Rịa – Vũng Tàu · <a href="#about">Giới thiệu & chính sách dữ liệu</a></div>
+  <div>Nhấn <kbd>?</kbd> để xem phím tắt</div>
+</div></footer>
+<div class="modal" id="modal" role="dialog" aria-modal="true"><div class="box" id="modalBox"></div></div>
+<button class="fab" id="fab" aria-expanded="false" aria-controls="lookup"><b>📖</b>Tra từ nhanh</button>
+<div class="lookup card glass" id="lookup" role="dialog" aria-label="Tra từ nhanh"><div class="row between"><b>Tra từ nhanh</b><button class="btn sm" id="lkClose" aria-label="Đóng">✕</button></div>
+<input type="search" id="lkQ" placeholder="Nhập thuật ngữ: hàm ngôn, ẩn dụ, ngụy biện…" style="margin-top:8px"><div class="res" id="lkRes"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
