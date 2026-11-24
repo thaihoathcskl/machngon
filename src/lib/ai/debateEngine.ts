@@ -197,22 +197,34 @@ function normalizeModelPayload(
   };
 }
 
+const ENGINE_PLACEHOLDER_KEYS = new Set([
+  'MY_GEMINI_API_KEY',
+  'your_api_key_here',
+  'YOUR_GEMINI_API_KEY',
+  'YOUR_OPENROUTER_API_KEY',
+  'CHANGE_ME',
+]);
+
 function hasValidGeminiKey(): boolean {
   const key = process.env.GEMINI_API_KEY?.trim();
-  return Boolean(
-    key && key.length > 0 && key !== 'MY_GEMINI_API_KEY' && key !== 'your_api_key_here'
-  );
+  return Boolean(key && key.length > 0 && !ENGINE_PLACEHOLDER_KEYS.has(key));
 }
 
 function hasValidOpenRouterKey(): boolean {
   const key = process.env.OPENROUTER_API_KEY?.trim();
-  return Boolean(key && key.length > 0);
+  return Boolean(key && key.length > 0 && !ENGINE_PLACEHOLDER_KEYS.has(key));
 }
 
 function hasValidOpenAIKey(): boolean {
   const key = process.env.OPENAI_API_KEY?.trim();
-  return Boolean(key && key.length > 0);
+  return Boolean(key && key.length > 0 && !ENGINE_PLACEHOLDER_KEYS.has(key));
 }
+
+const ALLOWED_GEMINI_MODELS = new Set([
+  'gemini-2.5-flash',
+  'gemini-2.5-pro',
+  'gemini-2.0-flash',
+]);
 
 async function callGeminiStructuredAPI(
   payload: LabApiRequestPayload,
@@ -224,7 +236,11 @@ async function callGeminiStructuredAPI(
     throw new Error('GEMINI_API_KEY_MISSING');
   }
 
-  const modelName = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
+  const requestedModel = payload.model?.trim();
+  const modelName =
+    requestedModel && ALLOWED_GEMINI_MODELS.has(requestedModel)
+      ? requestedModel
+      : process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
 
   const ai = new GoogleGenAI({
     apiKey,
@@ -235,9 +251,30 @@ async function callGeminiStructuredAPI(
     },
   });
 
+  const parts: Array<
+    { text: string } | { inlineData: { mimeType: string; data: string } }
+  > = [{ text: userPrompt }];
+
+  if (Array.isArray(payload.attachments) && payload.attachments.length > 0) {
+    for (const att of payload.attachments.slice(0, 3)) {
+      if (att.textContent && att.textContent.trim()) {
+        parts.push({
+          text: `\n[Tệp đính kèm: ${att.name}]\n${att.textContent.slice(0, 12000)}`,
+        });
+      } else if (att.base64Data && att.mimeType) {
+        parts.push({
+          inlineData: {
+            mimeType: att.mimeType,
+            data: att.base64Data,
+          },
+        });
+      }
+    }
+  }
+
   const response = await ai.models.generateContent({
     model: modelName,
-    contents: userPrompt,
+    contents: parts.length === 1 ? userPrompt : [{ role: 'user', parts }],
     config: {
       systemInstruction: systemPrompt,
       maxOutputTokens: 2048,
@@ -320,13 +357,39 @@ async function callGeminiStructuredAPI(
   return normalizeModelPayload(parsed, payload, responseId, 'gemini');
 }
 
+function extractOpenRouterCitationSources(
+  annotations: Array<{ url_citation?: { url?: string; title?: string }; url?: string; title?: string }> | undefined
+) {
+  if (!Array.isArray(annotations)) return [];
+  const seen = new Set<string>();
+  const sources: Array<{ title: string; uri: string; url: string }> = [];
+  for (const ann of annotations) {
+    const rawUrl = (ann?.url_citation?.url || ann?.url || '').trim();
+    if (!rawUrl || seen.has(rawUrl)) continue;
+    try {
+      const parsed = new URL(rawUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue;
+      seen.add(rawUrl);
+      const rawTitle = (ann?.url_citation?.title || ann?.title || '').trim();
+      sources.push({
+        title: rawTitle || parsed.hostname.replace(/^www\./, ''),
+        uri: rawUrl,
+        url: rawUrl,
+      });
+    } catch {
+      // Ignore malformed URI
+    }
+  }
+  return sources;
+}
+
 async function callOpenRouterAPI(
   payload: LabApiRequestPayload,
   systemPrompt: string,
   userPrompt: string
 ): Promise<LabApiResponsePayload> {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
-  if (!apiKey) {
+  if (!apiKey || ENGINE_PLACEHOLDER_KEYS.has(apiKey)) {
     throw new Error('OPENROUTER_API_KEY_MISSING');
   }
 
@@ -334,22 +397,15 @@ async function callOpenRouterAPI(
     /\/+$/,
     ''
   );
-  const modelName = process.env.OPENROUTER_MODEL?.trim() || 'openrouter/free';
+  const configuredModel = process.env.OPENROUTER_MODEL?.trim() || 'openrouter/free';
   const appUrl =
     process.env.APP_URL && process.env.APP_URL !== 'MY_APP_URL'
       ? process.env.APP_URL
       : 'http://localhost:3000';
 
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-      'HTTP-Referer': appUrl,
-      'X-Title': 'Mach Ngon AI Labs',
-    },
-    body: JSON.stringify({
-      model: modelName,
+  const invokeModel = async (modelId: string, withWebPlugin: boolean) => {
+    const requestBody: Record<string, unknown> = {
+      model: modelId,
       temperature: 0.4,
       max_tokens: 2048,
       messages: [
@@ -362,42 +418,88 @@ async function callOpenRouterAPI(
           content: userPrompt,
         },
       ],
-    }),
-  });
+    };
+    if (withWebPlugin) {
+      requestBody.plugins = [{ id: 'web', max_results: 4 }];
+    }
 
-  if (res.status === 429) {
-    const err = new Error('OPENROUTER_RATE_LIMIT_429') as Error & { status?: number };
-    err.status = 429;
-    throw err;
-  }
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'HTTP-Referer': appUrl,
+        'X-Title': 'Mach Ngon AI Labs',
+      },
+      body: JSON.stringify(requestBody),
+    });
 
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => '');
-    throw new Error(`OpenRouter API error (${res.status}): ${errorText.slice(0, 200)}`);
-  }
+    if (res.status === 429) {
+      const err = new Error('OPENROUTER_RATE_LIMIT_429') as Error & { status?: number };
+      err.status = 429;
+      throw err;
+    }
 
-  const data = (await res.json()) as {
-    id?: string;
-    choices?: Array<{
-      message?: {
-        content?: string | Array<{ type?: string; text?: string }>;
-      };
-    }>;
+    if (!res.ok) {
+      const errorText = await res.text().catch(() => '');
+      const err = new Error(
+        `OpenRouter API error (${res.status}): ${errorText.slice(0, 200)}`
+      ) as Error & { status?: number };
+      err.status = res.status;
+      throw err;
+    }
+
+    const data = (await res.json()) as {
+      id?: string;
+      choices?: Array<{
+        message?: {
+          content?: string | Array<{ type?: string; text?: string }>;
+          annotations?: Array<{
+            url_citation?: { url?: string; title?: string };
+            url?: string;
+            title?: string;
+          }>;
+        };
+      }>;
+    };
+
+    const msg = data.choices?.[0]?.message;
+    const rawContent = msg?.content;
+    const contentText =
+      typeof rawContent === 'string'
+        ? rawContent
+        : Array.isArray(rawContent)
+          ? rawContent.map((part) => part.text ?? '').join('')
+          : '';
+
+    const parsed = extractCleanJson(contentText);
+    const responseId = `resp_openrouter_${payload.session_id.slice(0, 8)}_${Date.now().toString(36)}`;
+    sessionPreviousResponseMap.set(payload.session_id, responseId);
+
+    const normalized = normalizeModelPayload(parsed, payload, responseId, 'openai-responses');
+    const sources = extractOpenRouterCitationSources(msg?.annotations);
+    if (sources.length > 0) {
+      normalized.sources = sources;
+    }
+    return normalized;
   };
 
-  const rawContent = data.choices?.[0]?.message?.content;
-  const contentText =
-    typeof rawContent === 'string'
-      ? rawContent
-      : Array.isArray(rawContent)
-        ? rawContent.map((part) => part.text ?? '').join('')
-        : '';
-
-  const parsed = extractCleanJson(contentText);
-  const responseId = `resp_openrouter_${payload.session_id.slice(0, 8)}_${Date.now().toString(36)}`;
-  sessionPreviousResponseMap.set(payload.session_id, responseId);
-
-  return normalizeModelPayload(parsed, payload, responseId, 'openai-responses');
+  try {
+    return await invokeModel(configuredModel, true);
+  } catch (err) {
+    const status = (err as { status?: number })?.status ?? 0;
+    if (status === 401 || status === 403 || status === 429) {
+      throw err;
+    }
+    try {
+      return await invokeModel(configuredModel, false);
+    } catch (plainErr) {
+      if (configuredModel !== 'openrouter/free') {
+        return await invokeModel('openrouter/free', false);
+      }
+      throw plainErr;
+    }
+  }
 }
 
 async function callOpenAIResponsesAPI(
@@ -520,6 +622,21 @@ export async function executeDebateEngine(
   const geminiCaller = overrides?.callGemini ?? callGeminiStructuredAPI;
   const openRouterCaller = overrides?.callOpenRouter ?? callOpenRouterAPI;
   const openAICaller = overrides?.callOpenAI ?? callOpenAIResponsesAPI;
+  const preferOpenRouterFirst =
+    process.env.AI_PRIMARY_PROVIDER?.trim().toLowerCase() === 'openrouter' &&
+    (hasValidOpenRouterKey() || Boolean(overrides?.callOpenRouter));
+
+  if (preferOpenRouterFirst) {
+    try {
+      return await withTimeout(
+        openRouterCaller(payload, systemPrompt, userPrompt),
+        18_000,
+        'OPENROUTER'
+      );
+    } catch (err) {
+      console.error('[DebateEngine] OpenRouter primary error:', err);
+    }
+  }
 
   if (hasValidGeminiKey() || overrides?.callGemini) {
     try {
@@ -529,7 +646,7 @@ export async function executeDebateEngine(
     }
   }
 
-  if (hasValidOpenRouterKey() || overrides?.callOpenRouter) {
+  if (!preferOpenRouterFirst && (hasValidOpenRouterKey() || overrides?.callOpenRouter)) {
     try {
       return await withTimeout(
         openRouterCaller(payload, systemPrompt, userPrompt),

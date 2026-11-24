@@ -38,7 +38,7 @@ type AdminTab = 'overview' | 'quotes' | 'library' | 'system';
 
 interface AdminAuthStatus {
   configured: boolean;
-  source: 'env' | 'local-bootstrap' | 'unconfigured';
+  source: 'env' | 'unconfigured';
   authenticated: boolean;
 }
 
@@ -114,7 +114,6 @@ export default function AdminPage() {
   // Admin auth state — Bearer token stored ONLY in React memory (never localStorage/sessionStorage)
   const [authStatus, setAuthStatus] = useState<AdminAuthStatus | null>(null);
   const [passcodeInput, setPasscodeInput] = useState('');
-  const [confirmPasscodeInput, setConfirmPasscodeInput] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -152,7 +151,7 @@ export default function AdminPage() {
       const data = (await res.json()) as AdminAuthStatus;
       setAuthStatus(data);
     } catch {
-      setAuthStatus({ configured: true, source: 'env', authenticated: false });
+      setAuthStatus({ configured: false, source: 'unconfigured', authenticated: false });
     }
   }, [adminToken]);
 
@@ -236,26 +235,20 @@ export default function AdminPage() {
   const handleAdminAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
-    const isBootstrap = authStatus && !authStatus.configured;
 
-    if (isBootstrap) {
-      if (passcodeInput.trim().length < 8) {
-        setAuthError('Mã quản trị cần tối thiểu 8 ký tự.');
-        return;
-      }
-      if (passcodeInput !== confirmPasscodeInput) {
-        setAuthError('Mã xác nhận chưa trùng khớp.');
-        return;
-      }
-    } else if (!passcodeInput.trim()) {
+    if (!authStatus?.configured) {
+      setAuthError('Cổng quản trị đang tạm khóa vì biến môi trường ADMIN_PASSCODE chưa được thiết lập trên máy chủ.');
+      return;
+    }
+
+    if (!passcodeInput.trim()) {
       setAuthError('Vui lòng nhập mã quản trị.');
       return;
     }
 
     setAuthBusy(true);
     try {
-      const endpoint = isBootstrap ? '/api/admin/auth/bootstrap' : '/api/admin/auth/login';
-      const res = await fetch(endpoint, {
+      const res = await fetch('/api/admin/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ passcode: passcodeInput }),
@@ -267,18 +260,12 @@ export default function AdminPage() {
       }
       setAdminToken(body.token);
       setPasscodeInput('');
-      setConfirmPasscodeInput('');
       setAuthStatus({
         configured: true,
-        source: isBootstrap ? 'local-bootstrap' : authStatus?.source ?? 'env',
+        source: 'env',
         authenticated: true,
       });
-      showToast(
-        isBootstrap
-          ? 'Đã thiết lập mã bảo vệ và đăng nhập bảng quản trị.'
-          : 'Đăng nhập bảng quản trị thành công.',
-        { variant: 'success' }
-      );
+      showToast('Đăng nhập bảng quản trị thành công.', { variant: 'success' });
     } catch {
       setAuthError('Không thể kết nối máy chủ xác thực.');
     } finally {
@@ -430,7 +417,7 @@ export default function AdminPage() {
   // GATE: Server-Side Admin Authentication Screen
   // =========================================================================
   if (!adminToken) {
-    const isBootstrap = authStatus !== null && !authStatus.configured;
+    const isLockedUnconfigured = authStatus !== null && !authStatus.configured;
 
     return (
       <WorkspaceShell>
@@ -443,17 +430,37 @@ export default function AdminPage() {
                 <span>Khu vực quản trị có xác thực máy chủ</span>
               </div>
               <h1 className="mt-2 font-display text-2xl font-semibold text-[var(--color-text)]">
-                {isBootstrap ? 'Thiết lập mã Quản trị lần đầu' : 'Đăng nhập Quản trị Mạch Ngôn'}
+                {isLockedUnconfigured
+                  ? 'Cổng quản trị đang tạm khóa'
+                  : 'Đăng nhập Quản trị Mạch Ngôn'}
               </h1>
               <p className="mt-2 text-xs leading-relaxed text-[var(--color-text-muted)]">
-                {isBootstrap
-                  ? 'Hệ thống chưa thiết lập biến môi trường ADMIN_PASSCODE. Hãy tạo mã bảo vệ quản trị viên (tối thiểu 8 ký tự) để bảo vệ các thao tác quản lý danh ngôn và nội dung.'
+                {isLockedUnconfigured
+                  ? 'Để đảm bảo an toàn, trang Quản trị chỉ mở khi quản trị viên hệ thống đã cấu hình biến môi trường ADMIN_PASSCODE trên máy chủ.'
                   : 'Nhập mã quản trị viên để truy cập bảng điều khiển Danh ngôn hôm nay, Thư viện học liệu và Cài đặt hệ thống.'}
               </p>
             </div>
 
             {authStatus === null ? (
               <LoadingState compact label="Đang kiểm tra trạng thái xác thực máy chủ…" />
+            ) : isLockedUnconfigured ? (
+              <div
+                role="status"
+                className="mt-6 rounded-xl px-4 py-4 text-xs leading-relaxed border text-left space-y-2"
+                style={{
+                  backgroundColor: 'var(--color-warn-bg)',
+                  borderColor: 'var(--color-warn-border)',
+                  color: 'var(--color-text)',
+                }}
+              >
+                <div className="flex items-center gap-2 font-semibold">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-[var(--color-primary)]" />
+                  <span>Quyền quản trị chưa được kích hoạt trên môi trường này</span>
+                </div>
+                <p className="text-[var(--color-text-muted)]">
+                  Hệ thống đã vô hiệu hóa việc tạo mật khẩu quản trị từ trình duyệt. Nếu bạn là người vận hành dự án, hãy thiết lập biến môi trường <code className="font-mono">ADMIN_PASSCODE</code> trong cài đặt máy chủ rồi khởi động lại.
+                </p>
+              </div>
             ) : (
               <form onSubmit={handleAdminAuthSubmit} className="mt-6 space-y-4">
                 {authError && (
@@ -471,12 +478,12 @@ export default function AdminPage() {
 
                 <div>
                   <label htmlFor="admin-passcode" className="block text-xs font-medium mb-1.5">
-                    {isBootstrap ? 'Tạo mã quản trị mới (tối thiểu 8 ký tự)' : 'Mã quản trị viên'}
+                    Mã quản trị viên
                   </label>
                   <input
                     id="admin-passcode"
                     type="password"
-                    autoComplete={isBootstrap ? 'new-password' : 'current-password'}
+                    autoComplete="current-password"
                     value={passcodeInput}
                     onChange={(e) => setPasscodeInput(e.target.value)}
                     placeholder="••••••••"
@@ -484,34 +491,13 @@ export default function AdminPage() {
                   />
                 </div>
 
-                {isBootstrap && (
-                  <div>
-                    <label htmlFor="admin-passcode-confirm" className="block text-xs font-medium mb-1.5">
-                      Xác nhận mã quản trị
-                    </label>
-                    <input
-                      id="admin-passcode-confirm"
-                      type="password"
-                      autoComplete="new-password"
-                      value={confirmPasscodeInput}
-                      onChange={(e) => setConfirmPasscodeInput(e.target.value)}
-                      placeholder="Nhập lại mã quản trị"
-                      className="input-editorial"
-                    />
-                  </div>
-                )}
-
                 <button
                   type="submit"
                   disabled={authBusy}
                   className="btn-primary w-full !min-h-11"
                 >
                   <KeyRound className="h-4 w-4" />
-                  {authBusy
-                    ? 'Đang xác thực…'
-                    : isBootstrap
-                      ? 'Thiết lập & Mở bảng quản trị'
-                      : 'Xác thực & Đăng nhập'}
+                  {authBusy ? 'Đang xác thực…' : 'Xác thực & Đăng nhập'}
                 </button>
               </form>
             )}
@@ -841,6 +827,7 @@ export default function AdminPage() {
                                 <button
                                   type="button"
                                   title={q.verified ? 'Bỏ đánh dấu xác minh' : 'Xác minh để đưa vào xoay vòng'}
+                                  aria-label={q.verified ? 'Bỏ đánh dấu xác minh danh ngôn' : 'Xác minh danh ngôn'}
                                   onClick={() =>
                                     handleQuickPatchQuote(
                                       q,
@@ -857,6 +844,7 @@ export default function AdminPage() {
                                 <button
                                   type="button"
                                   title={q.hidden ? 'Hiện lại danh ngôn' : 'Ẩn danh ngôn khỏi xoay vòng'}
+                                  aria-label={q.hidden ? 'Hiện lại danh ngôn' : 'Ẩn danh ngôn'}
                                   onClick={() =>
                                     handleQuickPatchQuote(
                                       q,
@@ -871,6 +859,7 @@ export default function AdminPage() {
                                 <button
                                   type="button"
                                   title="Chỉnh sửa danh ngôn"
+                                  aria-label="Chỉnh sửa danh ngôn"
                                   onClick={() => loadQuoteForEdit(q)}
                                   className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]/60 text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition-colors cursor-pointer"
                                 >
@@ -879,6 +868,7 @@ export default function AdminPage() {
                                 <button
                                   type="button"
                                   title="Xóa danh ngôn"
+                                  aria-label="Xóa danh ngôn"
                                   onClick={() => setDeleteQuoteTarget(q)}
                                   className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]/60 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors cursor-pointer"
                                 >

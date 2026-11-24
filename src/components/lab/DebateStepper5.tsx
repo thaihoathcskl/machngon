@@ -10,6 +10,8 @@ export interface DebateStageMeta {
   debateShort: string;
   conceptLabel: string;
   conceptShort: string;
+  readLabel: string;
+  readShort: string;
 }
 
 export const DEBATE_STAGES: DebateStageMeta[] = [
@@ -20,6 +22,8 @@ export const DEBATE_STAGES: DebateStageMeta[] = [
     debateShort: '1. Lập trường',
     conceptLabel: 'Cách hiểu ban đầu',
     conceptShort: '1. Khái niệm',
+    readLabel: 'Thể loại & ấn tượng',
+    readShort: '1. Thể loại',
   },
   {
     stage: 2,
@@ -28,6 +32,8 @@ export const DEBATE_STAGES: DebateStageMeta[] = [
     debateShort: '2. Bằng chứng',
     conceptLabel: 'Đặc điểm cốt lõi',
     conceptShort: '2. Cốt lõi',
+    readLabel: 'Chi tiết ngôn từ',
+    readShort: '2. Chi tiết',
   },
   {
     stage: 3,
@@ -36,6 +42,8 @@ export const DEBATE_STAGES: DebateStageMeta[] = [
     debateShort: '3. Phản ví dụ',
     conceptLabel: 'Ví dụ & phản ví dụ',
     conceptShort: '3. Phản ví dụ',
+    readLabel: 'Quy luật nghệ thuật',
+    readShort: '3. Quy luật',
   },
   {
     stage: 4,
@@ -44,6 +52,8 @@ export const DEBATE_STAGES: DebateStageMeta[] = [
     debateShort: '4. Điều chỉnh',
     conceptLabel: 'Tinh chỉnh ranh giới',
     conceptShort: '4. Ranh giới',
+    readLabel: 'Diễn giải nghĩa',
+    readShort: '4. Diễn giải',
   },
   {
     stage: 5,
@@ -52,8 +62,20 @@ export const DEBATE_STAGES: DebateStageMeta[] = [
     debateShort: '5. Tổng kết',
     conceptLabel: 'Hoàn thiện định nghĩa',
     conceptShort: '5. Tổng kết',
+    readLabel: 'Cảm nhận cá nhân',
+    readShort: '5. Cảm nhận',
   },
 ];
+
+function getStageLabels(item: DebateStageMeta, labType: LabType): { label: string; shortLabel: string } {
+  if (labType === 'concept') {
+    return { label: item.conceptLabel, shortLabel: item.conceptShort };
+  }
+  if (labType === 'read') {
+    return { label: item.readLabel, shortLabel: item.readShort };
+  }
+  return { label: item.debateLabel, shortLabel: item.debateShort };
+}
 
 interface DebateStepperBarProps {
   currentStage: number; // 1..5
@@ -77,13 +99,45 @@ export function DebateStepperBar({
     ? Math.min(Math.max(analyzingStepIndex, 0), 4)
     : activeStage - 1;
 
+  const currentMeta = DEBATE_STAGES[effectiveIndex] ?? DEBATE_STAGES[0];
+  const currentStepName = getStageLabels(currentMeta, labType).label;
+  const progressPct = Math.round(((effectiveIndex + 1) / DEBATE_STAGES.length) * 100);
+
   return (
     <div
       role="region"
       aria-label="Tiến trình 5 bước đối thoại Socrates"
       className="shrink-0 border-b border-[var(--color-border)]/80 bg-[var(--color-bg)]/85 backdrop-blur-[2px] px-3 sm:px-5 py-2"
     >
-      <div className="mx-auto max-w-[960px] flex items-center justify-center gap-2 overflow-x-auto no-scrollbar">
+      {/* Mobile (< 640px): Compact 1-line Bước X/5 · [Tên bước] with zero horizontal overflow */}
+      <div className="sm:hidden flex items-center justify-between gap-2.5">
+        <div className="flex items-center gap-1.5 min-w-0 text-xs">
+          <span className="shrink-0 font-mono-num font-semibold text-[var(--color-primary)]">
+            {isAnalyzing ? (
+              <span className="inline-flex items-center gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Bước {effectiveIndex + 1}/5
+              </span>
+            ) : (
+              `Bước ${activeStage}/5`
+            )}
+          </span>
+          <span aria-hidden="true" className="text-[var(--color-text-muted)]">·</span>
+          <span className="truncate font-medium text-[var(--color-text)]">{currentStepName}</span>
+        </div>
+        <div
+          aria-hidden="true"
+          className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-[var(--color-border)]"
+        >
+          <div
+            className="h-full rounded-full bg-[var(--color-primary)] transition-[width] duration-200"
+            style={{ width: `${progressPct}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Tablet & Desktop (sm+): Full 5-stage horizontal progress bar */}
+      <div className="hidden sm:flex mx-auto max-w-[960px] items-center justify-center gap-2 overflow-x-auto no-scrollbar">
         <span className="shrink-0 text-[11px] font-semibold text-[var(--color-primary)] font-mono-num pr-1">
           {isAnalyzing ? (
             <span className="inline-flex items-center gap-1">
@@ -99,8 +153,7 @@ export function DebateStepperBar({
           {DEBATE_STAGES.map((item, idx) => {
             const isCompleted = !isAnalyzing && item.stage < activeStage;
             const isCurrent = isAnalyzing ? idx === effectiveIndex : item.stage === activeStage;
-            const label = labType === 'concept' ? item.conceptLabel : item.debateLabel;
-            const shortLabel = labType === 'concept' ? item.conceptShort : item.debateShort;
+            const { label, shortLabel } = getStageLabels(item, labType);
 
             return (
               <React.Fragment key={item.key}>
@@ -142,9 +195,16 @@ export function DebateStepperBar({
 /**
  * Compact inline thinking indicator shown inside the chat stream while AI analyzes.
  */
-export function DebateStepperLive({ activeIndex }: { activeIndex: number }) {
+export function DebateStepperLive({
+  activeIndex,
+  labType = 'debate',
+}: {
+  activeIndex: number;
+  labType?: LabType;
+}) {
   const safeIdx = Math.min(Math.max(activeIndex, 0), 4);
-  const currentMeta = DEBATE_STAGES[safeIdx];
+  const currentMeta = DEBATE_STAGES[safeIdx] ?? DEBATE_STAGES[0];
+  const currentLabel = getStageLabels(currentMeta, labType).label;
 
   return (
     <div
@@ -163,7 +223,7 @@ export function DebateStepperLive({ activeIndex }: { activeIndex: number }) {
           Trợ lý Mạch Ngôn đang suy luận…
         </span>
         <span className="font-mono-num text-[11px] text-[var(--color-primary)]">
-          ({safeIdx + 1}/5 · {currentMeta?.debateLabel})
+          ({safeIdx + 1}/5 · {currentLabel})
         </span>
       </div>
     </div>

@@ -1,3 +1,4 @@
+import { DEFAULT_LIBRARY_COLLECTIONS } from '../../content/library/collections.ts';
 import { LIBRARY_CONCEPTS } from '../../content/library/concepts.ts';
 import type { ReadingScrollState } from '../storage.ts';
 import type { LibraryConcept, LibraryDocument, UserProfile } from '../types.ts';
@@ -73,38 +74,74 @@ export function getPersonalizedRecommendations(
   const exploreQuery = normalizeVietnameseText(user.exploreTopic ?? '');
   const savedSet = new Set(savedDocIds);
 
-  const scored = published
-    .map((doc) => {
-      let score = 0;
-      const docCategory = normalizeCategoryName(doc.category);
-      const progress = readingProgressMap[doc.id];
+  // Identify the next unread document in any collection the user has started reading
+  const nextCollectionDocIds = new Set<string>();
+  for (const collection of DEFAULT_LIBRARY_COLLECTIONS) {
+    const hasStartedAny = collection.documentIds.some((docId) => {
+      const progress = readingProgressMap[docId];
+      return Boolean(progress && progress.scrollPercent >= 5);
+    });
+    if (!hasStartedAny) continue;
+    const nextUnreadId = collection.documentIds.find((docId) => {
+      const progress = readingProgressMap[docId];
+      return (!progress || progress.scrollPercent < 85) && !savedSet.has(docId);
+    });
+    if (nextUnreadId) {
+      nextCollectionDocIds.add(nextUnreadId);
+    }
+  }
 
-      if (preferredCategories.has(docCategory)) {
-        score += 14;
-      }
+  // Exclude already-saved docs and docs completed >= 90% from primary recommendations
+  const primaryPool = published.filter((doc) => {
+    const progress = readingProgressMap[doc.id];
+    const completed = Boolean(progress && progress.scrollPercent >= 90);
+    return !savedSet.has(doc.id) && !completed;
+  });
 
-      if (exploreQuery) {
-        const match = scoreDocumentMatch(doc, exploreQuery);
-        if (match > 0) score += Math.min(18, match);
-      }
+  const scoreCandidates = (pool: LibraryDocument[]) =>
+    pool
+      .map((doc) => {
+        let score = 0;
+        const docCategory = normalizeCategoryName(doc.category);
+        const progress = readingProgressMap[doc.id];
 
-      // Gently prioritize documents the user hasn't finished yet
-      if (!progress) {
-        score += 5;
-      } else if (progress.scrollPercent < 85) {
-        score += 3;
-      } else {
-        score -= 6;
-      }
+        if (nextCollectionDocIds.has(doc.id)) {
+          score += 10;
+        }
 
-      // Mild bonus for saved or featured docs
-      if (savedSet.has(doc.id)) score += 2;
-      if (doc.featured) score += 4;
-      if (doc.difficulty === 'intro') score += 2;
+        if (preferredCategories.has(docCategory)) {
+          score += 14;
+        }
 
-      return { doc, score };
-    })
-    .sort((a, b) => b.score - a.score);
+        if (exploreQuery) {
+          const match = scoreDocumentMatch(doc, exploreQuery);
+          if (match > 0) score += Math.min(18, match);
+        }
+
+        // Prioritize documents the user hasn't finished yet
+        if (!progress) {
+          score += 5;
+        } else if (progress.scrollPercent < 85) {
+          score += 3;
+        } else {
+          score -= 8;
+        }
+
+        if (doc.featured) score += 4;
+        if (doc.difficulty === 'intro') score += 2;
+
+        return { doc, score };
+      })
+      .sort((a, b) => b.score - a.score);
+
+  const scoredPrimary = scoreCandidates(primaryPool);
+  const scoredFallback =
+    scoredPrimary.length < limit
+      ? scoreCandidates(
+          published.filter((doc) => !primaryPool.some((candidate) => candidate.id === doc.id))
+        )
+      : [];
+  const scored = [...scoredPrimary, ...scoredFallback];
 
   // Pick diverse categories when scores are close so recommendations feel broad and inspiring
   const selected: LibraryDocument[] = [];

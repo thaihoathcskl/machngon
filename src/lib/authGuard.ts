@@ -1,15 +1,15 @@
 /**
  * Centralized route access-control helpers for MẠCH NGÔN.
- * Public routes: "/" (HomePage) and "/auth" (AuthPage).
- * All functional learning workspaces are protected and require authentication.
+ * Public routes: "/", "/auth", "/about", "/guide", "/library", and "/library/:slug".
+ * Protected workspaces: "/dashboard", "/lab", "/history", "/profile", "/onboarding", "/survey", "/admin".
  */
 
 export const AUTH_REQUIRED_NOTICE =
-  'Vui lòng đăng nhập để sử dụng đầy đủ tính năng của Mạch Ngôn.';
+  'Vui lòng đăng nhập để sử dụng đầy đủ tính năng cá nhân hóa của Mạch Ngôn.';
 
 export const AUTH_REQUIRED_MESSAGE = AUTH_REQUIRED_NOTICE;
 
-const PUBLIC_PATHS = new Set<string>(['/', '/auth']);
+const PUBLIC_PATHS = new Set<string>(['/', '/auth', '/about', '/guide', '/library', '/glossary']);
 
 export function normalizeRoutePath(pathname: string): string {
   if (!pathname || pathname === '/') return '/';
@@ -19,7 +19,9 @@ export function normalizeRoutePath(pathname: string): string {
 
 export function isPublicRoute(pathname: string): boolean {
   const normalized = normalizeRoutePath(pathname);
-  return PUBLIC_PATHS.has(normalized);
+  if (PUBLIC_PATHS.has(normalized)) return true;
+  if (normalized.startsWith('/library/')) return true;
+  return false;
 }
 
 export function isProtectedRoute(pathname: string): boolean {

@@ -84,6 +84,24 @@ export interface LibraryDocument {
   reviewStatus?: DocumentReviewStatus;
   verified?: boolean;
   contentVersion?: number;
+  // Structured V2 fields preserved alongside rendered blocks
+  fieldCode?: 'vh' | 'nn' | 'lt' | 'th' | 'tt' | 'kh';
+  genre?: string;
+  dePrompt?: string;
+  keyPoints?: string[];
+  examples?: string[];
+  practiceCorpora?: Array<{
+    title: string;
+    source?: string;
+    text: string;
+    task?: string;
+    mode?: LabType;
+  }>;
+  thinkingQuestions?: string[];
+  practiceExercise?: string;
+  isFullEssay?: boolean;
+  wordCount?: number;
+  reviewNote?: string;
 }
 
 export interface LibraryCategoryMeta {
@@ -120,7 +138,7 @@ export interface LibraryConcept {
   matchAliases?: string[];
 }
 
-export type LabType = 'concept' | 'debate';
+export type LabType = 'concept' | 'debate' | 'read' | 'annotate' | 'grade';
 
 export type LabDifficultyLevel = 'basic' | 'intermediate' | 'advanced';
 
@@ -192,6 +210,12 @@ export interface LedgerEntry {
   timestamp: string;
 }
 
+export interface GroundingSource {
+  title: string;
+  uri: string;
+  url?: string;
+}
+
 export interface LabMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -202,6 +226,8 @@ export interface LabMessage {
   debateSteps?: DebateStepItem[];
   sourceEngine?: 'openai-responses' | 'gemini' | 'local-fallback';
   responseId?: string;
+  sources?: GroundingSource[];
+  searchQueries?: string[];
   attachments?: Array<{
     id: string;
     name: string;
@@ -235,6 +261,7 @@ export interface LabApiRequestPayload {
   session_id: string;
   lab_type: LabType;
   difficulty?: LabDifficultyLevel;
+  model?: AiModelId;
   message: string;
   resource_context_id?: string | null;
   attachments?: LabAttachment[];
@@ -261,6 +288,8 @@ export interface LabApiResponsePayload {
   contradiction_ref?: string | null;
   debate_steps: DebateStepItem[];
   three_layer: ThreeLayerResponse;
+  sources?: GroundingSource[];
+  searchQueries?: string[];
 }
 
 export interface SessionReportData {
@@ -343,8 +372,79 @@ export interface LabHandoffPayload {
   resourceContextId: string;
   resourceTitle: string;
   quoteText: string;
+  question?: string;
   blockLabel?: string;
   sectionId?: string;
   sectionTitle?: string;
   actionIntent?: LabActionIntent;
 }
+
+export type ToulminRole = 'claim' | 'ground' | 'warrant' | 'qual' | 'reb' | 'none';
+
+export type RubricCriterionKey = 'claim' | 'evidence' | 'assumption' | 'counter' | 'wording';
+
+export type RubricScores = Record<RubricCriterionKey, 1 | 2 | 3>;
+
+export interface RubricEvaluationResult {
+  scores: RubricScores;
+  comments: Partial<Record<RubricCriterionKey, string>>;
+  next: string;
+  question: string;
+  source: 'ai' | 'local';
+  sources?: GroundingSource[];
+  fallbackReason?: string;
+}
+
+export interface RubricScoreEntry {
+  id: string;
+  timestamp: number;
+  scores: RubricScores;
+  source: 'ai' | 'local';
+  documentId?: string | null;
+  words: number;
+}
+
+export interface GlossaryQuizQuestion {
+  term: string;
+  question: string;
+  options: string[];
+  correctIndex: number;
+}
+
+export type AiModelId = 'gemini-2.5-flash' | 'gemini-2.5-pro' | 'gemini-2.0-flash';
+
+export interface DocumentComment {
+  id: string;
+  documentId: string;
+  authorName: string;
+  rating: 'helpful' | 'needs_improvement';
+  stars?: number;
+  content: string;
+  createdAt: string;
+}
+
+export type DocumentReportReason =
+  | 'Sai kiến thức'
+  | 'Lỗi chính tả / hiển thị'
+  | 'Thiếu hoặc sai nguồn dẫn chứng'
+  | 'Đề xuất cập nhật nội dung'
+  | 'Khác';
+
+export interface DocumentReportItem {
+  id: string;
+  documentId: string;
+  documentTitle: string;
+  reason: DocumentReportReason;
+  detail: string;
+  createdAt: string;
+}
+
+export interface AiFeedbackFlag {
+  id: string;
+  sessionId: string;
+  messageId: string;
+  turnRef?: string;
+  note: string;
+  createdAt: string;
+}
+

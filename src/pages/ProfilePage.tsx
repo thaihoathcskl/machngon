@@ -1,17 +1,26 @@
-import React, { lazy, Suspense, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useState } from 'react';
 import {
+  AlertCircle,
   Bell,
   BookOpen,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Cpu,
+  Download,
   History,
+  Loader2,
   LogOut,
   MessageSquareText,
   Palette,
+  RefreshCw,
+  RotateCcw,
   Save,
   Shield,
+  ShieldCheck,
   Sliders,
+  Trash2,
   UserCheck,
 } from 'lucide-react';
 import { WorkspaceShell } from '../components/layout/AppShell';
@@ -20,23 +29,49 @@ import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { PageHeader } from '../components/ui/EditorialPrimitives';
 import { useToast } from '../components/ui/ToastProvider';
 import { ToggleSwitch } from '../components/ui/UiControls';
+import { DEFAULT_LIBRARY_CATEGORIES } from '../content/library/categories';
 import { useApp } from '../lib/AppContext';
 import { PRESET_LIST } from '../lib/palettes';
 import { Link, useRouter } from '../lib/router';
+import {
+  clearAllLocalData,
+  exportAllLocalDataJson,
+  loadPreferredAiModel,
+  savePreferredAiModel,
+} from '../lib/storage';
+import type { AiModelId } from '../lib/types';
 
 // Code-split Tier 2 Color Customizer so initial bundle stays lean
 const Tier2ColorCustomizer = lazy(
   () => import('../components/theme/Tier2ColorCustomizer')
 );
 
-const INTEREST_SUGGESTIONS = [
-  'Ngữ văn',
-  'Triết học và tư tưởng',
-  'Ngôn ngữ',
-  'Tư duy và lập luận',
-  'Văn hóa - xã hội',
-  'Lịch sử - Văn hóa',
-  'Kỹ năng viết',
+const INTEREST_SUGGESTIONS = DEFAULT_LIBRARY_CATEGORIES.map((cat) => cat.name);
+
+const AI_MODEL_CHOICES: Array<{
+  id: AiModelId;
+  label: string;
+  badge: string;
+  description: string;
+}> = [
+  {
+    id: 'gemini-2.5-flash',
+    label: 'Gemini 2.5 Flash',
+    badge: 'Khuyên dùng',
+    description: 'Cân bằng tốc độ phản hồi nhanh và độ sâu học thuật cho cả AI Library lẫn Thinking Lab.',
+  },
+  {
+    id: 'gemini-2.5-pro',
+    label: 'Gemini 2.5 Pro',
+    badge: 'Chuyên sâu',
+    description: 'Ưu tiên suy luận đa tầng, bóc tách giả định ngầm và phản biện học thuật chặt chẽ.',
+  },
+  {
+    id: 'gemini-2.0-flash',
+    label: 'Gemini 2.0 Flash',
+    badge: 'Ổn định',
+    description: 'Nhẹ và ổn định cho các phiên tra cứu thuật ngữ và đối thoại rảnh tay liên tục.',
+  },
 ];
 
 const AVATAR_TINTS = [
@@ -61,6 +96,117 @@ export function ProfilePage() {
   // Tier 2 drawer is collapsed by default per architecture spec
   const [tier2Open, setTier2Open] = useState(false);
   const [signOutConfirmOpen, setSignOutConfirmOpen] = useState(false);
+  const [clearDataConfirmOpen, setClearDataConfirmOpen] = useState(false);
+
+  // AI Model Preference & Safe Server Connection Status (Zero client-side API key storage)
+  const [selectedModel, setSelectedModel] = useState<AiModelId>(() => loadPreferredAiModel());
+  const [aiStatus, setAiStatus] = useState<{
+    loading: boolean;
+    configured: boolean;
+    engine: string;
+    defaultModel: string;
+  }>({
+    loading: true,
+    configured: false,
+    engine: 'local-fallback',
+    defaultModel: 'gemini-2.5-flash',
+  });
+  const [testingAi, setTestingAi] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<{
+    ok: boolean;
+    message: string;
+    latencyMs?: number;
+  } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/ai/status')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!active || !data) return;
+        setAiStatus({
+          loading: false,
+          configured: Boolean(data.configured),
+          engine: String(data.engine || 'local-fallback'),
+          defaultModel: String(data.defaultModel || 'gemini-2.5-flash'),
+        });
+      })
+      .catch(() => {
+        if (active) {
+          setAiStatus((prev) => ({ ...prev, loading: false }));
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.hash === '#ai-settings') {
+      const target = document.getElementById('ai-settings');
+      if (target) {
+        window.setTimeout(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+      }
+    }
+  }, []);
+
+  const handleSelectAiModel = (model: AiModelId) => {
+    setSelectedModel(model);
+    savePreferredAiModel(model);
+    setAiTestResult(null);
+    showToast(`Đã chọn mô hình ${model} cho AI Library và Thinking Lab.`, { variant: 'success' });
+  };
+
+  const handleResetAiModel = () => {
+    setSelectedModel('gemini-2.5-flash');
+    savePreferredAiModel('gemini-2.5-flash');
+    setAiTestResult(null);
+    showToast('Đã khôi phục cấu hình AI về mặc định (gemini-2.5-flash).', { variant: 'info' });
+  };
+
+  const handleTestAiConnection = async () => {
+    setTestingAi(true);
+    setAiTestResult(null);
+    try {
+      const res = await fetch('/api/ai/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: selectedModel }),
+      });
+      const data = await res.json();
+      setAiTestResult({
+        ok: Boolean(data?.ok),
+        message:
+          typeof data?.message === 'string'
+            ? data.message
+            : 'Không nhận được phản hồi kiểm tra từ máy chủ.',
+        latencyMs: typeof data?.latencyMs === 'number' ? data.latencyMs : undefined,
+      });
+    } catch {
+      setAiTestResult({
+        ok: false,
+        message: 'Không thể kết nối tới endpoint /api/ai/test. Vui lòng thử lại sau.',
+      });
+    } finally {
+      setTestingAi(false);
+    }
+  };
+
+  const handleExportLocalData = () => {
+    const json = exportAllLocalDataJson();
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    const filename = `mach-ngon-backup-${dateStamp}.json`;
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`Đã xuất toàn bộ dữ liệu học tập cục bộ (${filename}).`, { variant: 'success' });
+  };
 
   const notifications = user.notifications ?? {
     dailyQuoteReminder: true,
@@ -468,6 +614,163 @@ export function ProfilePage() {
           </div>
         </section>
 
+        {/* Section 2.5: AI Model & Safe Server Connection Settings (#ai-settings) */}
+        <section
+          id="ai-settings"
+          aria-labelledby="ai-settings-heading"
+          className="rounded-2xl p-6 sm:p-7 surface-card space-y-5 scroll-mt-20"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-[var(--color-border)]">
+            <div>
+              <div className="inline-flex items-center gap-2 text-xs font-semibold text-[var(--color-primary)]">
+                <Cpu className="h-4 w-4" />
+                <span>Cấu hình AI · Áp dụng đồng bộ cho AI Library & AI Labs</span>
+              </div>
+              <h2
+                id="ai-settings-heading"
+                className="mt-1.5 font-display text-xl font-semibold text-[var(--color-text)]"
+              >
+                Mô hình AI & Trạng thái kết nối máy chủ
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-[var(--color-text-muted)]">
+                Chọn mô hình Gemini phù hợp với nhu cầu đọc hiểu hoặc tranh biện chuyên sâu. Mọi yêu cầu AI đều đi qua proxy máy chủ an toàn.
+              </p>
+            </div>
+
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1 text-xs">
+              {aiStatus.loading ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-text-muted)]" />
+                  <span className="text-[var(--color-text-muted)]">Đang kiểm tra…</span>
+                </>
+              ) : aiStatus.configured ? (
+                <>
+                  <CheckCircle2 className="h-3.5 w-3.5" style={{ color: 'var(--color-success)' }} />
+                  <span className="font-medium text-[var(--color-text)]">
+                    Máy chủ AI đã sẵn sàng ({aiStatus.engine})
+                  </span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="h-3.5 w-3.5 text-[var(--color-gold)]" />
+                  <span className="font-medium text-[var(--color-text)]">
+                    Chế độ cục bộ (chưa có GEMINI_API_KEY)
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div
+            role="radiogroup"
+            aria-label="Chọn mô hình Gemini ưu tiên"
+            className="grid grid-cols-1 md:grid-cols-3 gap-3.5"
+          >
+            {AI_MODEL_CHOICES.map((choice) => {
+              const active = selectedModel === choice.id;
+              return (
+                <button
+                  key={choice.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => handleSelectAiModel(choice.id)}
+                  className={`text-left rounded-xl p-4 border transition-all cursor-pointer ${
+                    active
+                      ? 'border-[var(--color-primary)] ring-1 ring-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_8%,var(--color-surface)_92%)]'
+                      : 'border-[var(--color-border)] bg-[var(--color-bg)]/45 hover:border-[var(--color-primary)]/45'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-display text-base font-semibold text-[var(--color-text)]">
+                      {choice.label}
+                    </span>
+                    <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-[10px] font-semibold text-[var(--color-primary)]">
+                      {choice.badge}
+                    </span>
+                  </div>
+                  <div className="mt-1 font-mono-num text-[11px] text-[var(--color-text-muted)]">
+                    {choice.id}
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-[var(--color-text-muted)]">
+                    {choice.description}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={handleTestAiConnection}
+                disabled={testingAi}
+                className="btn-primary !min-h-9 !px-4 !text-xs"
+              >
+                {testingAi ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                Kiểm tra kết nối AI
+              </button>
+              <button
+                type="button"
+                onClick={handleResetAiModel}
+                className="btn-secondary !min-h-9 !px-3.5 !text-xs"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Khôi phục mặc định
+              </button>
+            </div>
+
+            <span className="text-[11px] font-mono-num text-[var(--color-text-muted)]">
+              Mặc định máy chủ: {aiStatus.defaultModel}
+            </span>
+          </div>
+
+          {aiTestResult && (
+            <div
+              role="status"
+              className="rounded-xl border px-4 py-3 text-xs leading-relaxed flex items-start gap-2.5"
+              style={{
+                borderColor: aiTestResult.ok ? 'var(--color-success)' : 'var(--color-warn-border)',
+                backgroundColor: aiTestResult.ok
+                  ? 'color-mix(in srgb, var(--color-success) 10%, var(--color-surface) 90%)'
+                  : 'var(--color-warn-bg)',
+                color: 'var(--color-text)',
+              }}
+            >
+              {aiTestResult.ok ? (
+                <CheckCircle2
+                  className="h-4 w-4 shrink-0 mt-0.5"
+                  style={{ color: 'var(--color-success)' }}
+                />
+              ) : (
+                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-[var(--color-gold)]" />
+              )}
+              <div>
+                <p className="font-medium">{aiTestResult.message}</p>
+                {typeof aiTestResult.latencyMs === 'number' && aiTestResult.latencyMs > 0 && (
+                  <p className="mt-0.5 text-[11px] font-mono-num text-[var(--color-text-muted)]">
+                    Độ trễ phản hồi: {aiTestResult.latencyMs}ms
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)]/55 p-3.5 flex items-start gap-2.5 text-xs text-[var(--color-text-muted)] leading-relaxed">
+            <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5 text-[var(--color-primary)]" />
+            <p>
+              <strong className="text-[var(--color-text)]">Bảo vệ khóa API phía máy chủ:</strong>{' '}
+              Khóa <code className="font-mono-num text-[11px]">GEMINI_API_KEY</code> và{' '}
+              <code className="font-mono-num text-[11px]">OPENROUTER_API_KEY</code> được lưu trữ an toàn trong biến môi trường phía máy chủ (Server-side Proxy / Settings &gt; Secrets) và tuyệt đối không lưu trên trình duyệt để tránh lộ khóa công khai. Khi hết hạn mức hoặc tạm gián đoạn, hệ thống tự dự phòng hoặc chuyển sang chế độ phản biện học thuật cục bộ.
+            </p>
+          </div>
+        </section>
+
         {/* Section 3: Notification & Privacy Preferences (Working Toggles) */}
         <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="rounded-2xl p-6 surface-card">
@@ -540,6 +843,31 @@ export function ProfilePage() {
                 }}
               />
             </div>
+
+            <div className="mt-4 pt-4 border-t border-[var(--color-border)] space-y-3">
+              <p className="text-xs leading-relaxed text-[var(--color-text-muted)]">
+                <strong className="text-[var(--color-text)]">Minh bạch lưu trữ cục bộ:</strong>{' '}
+                Hồ sơ cá nhân, ghi chú đọc chậm, tủ sách đã lưu và lịch sử Thinking Lab được lưu trực tiếp trong <code className="font-mono-num text-[11px]">localStorage</code> / <code className="font-mono-num text-[11px]">sessionStorage</code> của trình duyệt này. Bạn toàn quyền sao lưu hoặc xóa sạch bất cứ lúc nào.
+              </p>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={handleExportLocalData}
+                  className="btn-secondary !min-h-9 !px-3.5 !text-xs"
+                >
+                  <Download className="h-3.5 w-3.5 text-[var(--color-primary)]" />
+                  Xuất dữ liệu học tập (.json)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setClearDataConfirmOpen(true)}
+                  className="inline-flex items-center gap-1.5 min-h-9 px-3.5 rounded-lg border border-[var(--color-danger)]/45 bg-[var(--color-surface)] text-xs font-medium text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors cursor-pointer"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Xóa dữ liệu cục bộ
+                </button>
+              </div>
+            </div>
           </div>
         </section>
       </div>
@@ -555,6 +883,23 @@ export function ProfilePage() {
           signOut();
           showToast('Bạn đã đăng xuất thành công.', { variant: 'info' });
           navigate('/');
+        }}
+      />
+
+      <ConfirmModal
+        open={clearDataConfirmOpen}
+        title="Xóa toàn bộ dữ liệu học tập cục bộ?"
+        description="Hành động này sẽ xóa toàn bộ hồ sơ, tủ sách đã lưu, ghi chú đọc chậm, lịch sử phiên Thinking Lab và tùy chọn màu sắc trên trình duyệt này. Hãy xuất tệp .json trước nếu bạn muốn sao lưu."
+        confirmLabel="Xóa toàn bộ dữ liệu"
+        danger
+        onCancel={() => setClearDataConfirmOpen(false)}
+        onConfirm={() => {
+          setClearDataConfirmOpen(false);
+          clearAllLocalData();
+          showToast('Đã xóa toàn bộ dữ liệu cục bộ. Đang tải lại thư phòng…', { variant: 'info' });
+          window.setTimeout(() => {
+            window.location.href = '/';
+          }, 300);
         }}
       />
     </WorkspaceShell>

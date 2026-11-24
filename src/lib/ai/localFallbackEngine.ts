@@ -5,10 +5,12 @@ import type {
   LabApiResponsePayload,
   LabAttachment,
   LabDifficultyLevel,
+  LabType,
   LedgerEntry,
   LibraryDocument,
 } from '../types.ts';
 import { normalizeVietnamese } from '../vietnamese.ts';
+import { V2_WORK_ALIASES } from './v2Pedagogy.ts';
 
 const ABSOLUTE_MARKERS: Array<{ key: string; label: string }> = [
   { key: 'luon luon', label: 'luôn luôn' },
@@ -157,7 +159,7 @@ function detectReferencedPriorTurn(
   return { referencedEntry: null, mentionsContradiction: false };
 }
 
-function inferHiddenAssumptions(message: string, labType: 'concept' | 'debate'): string[] {
+function inferHiddenAssumptions(message: string, labType: LabType): string[] {
   const norm = normalizeVietnamese(message);
   const found: string[] = [];
 
@@ -202,7 +204,7 @@ function inferHiddenAssumptions(message: string, labType: 'concept' | 'debate'):
   return found.slice(0, 2);
 }
 
-function buildEverydayExample(message: string, labType: 'concept' | 'debate'): string {
+function buildEverydayExample(message: string, labType: LabType): string {
   const norm = normalizeVietnamese(message);
   if (norm.includes('tu do') || norm.includes('tuy tien') || norm.includes('cong dong')) {
     return 'nếu một người bật loa lớn lúc 2 giờ sáng trong khu trọ, họ đang "làm điều mình thích" nhưng lại tước mất quyền nghỉ ngơi của cả xóm';
@@ -280,7 +282,7 @@ function buildEvidenceVerification(
 }
 
 function buildThinkingTraceMap(
-  labType: 'concept' | 'debate',
+  labType: LabType,
   ledger: LedgerEntry[],
   coreAssumptions: string[],
   resourceDoc?: LibraryDocument | null
@@ -513,6 +515,67 @@ export function runLocalFallbackEngine(
       questionHint = 'Gợi ý: Viết lại định nghĩa trọn vẹn hoặc bấm "Tổng kết · Bản đồ tư duy".';
       aiClaimSummary = 'Ghi nhận định nghĩa đã tinh chỉnh và mời chốt Bản đồ truy vết tư duy.';
     }
+  } else if (payload.lab_type === 'read') {
+    const padded = ` ${cleanedMessage.toLowerCase()} `;
+    const matchedAlias = V2_WORK_ALIASES.find((entry) =>
+      entry.keys.some((k) => {
+        const escKey = k.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(^|[^\\p{L}])${escKey}(?=$|[^\\p{L}])`, 'u').test(padded);
+      })
+    );
+    const hasPoemBreak = cleanedMessage.includes('\n') && cleanedMessage.split('\n').length >= 3;
+    const genreGuess = resourceDoc?.genre || (hasPoemBreak ? 'Thơ' : 'Tác phẩm văn học');
+    const devices: string[] = [];
+    if (cleanedMessage.includes('?')) devices.push('câu hỏi tu từ');
+    if (/\bnhư\b/i.test(cleanedMessage)) devices.push('phép so sánh ("như")');
+
+    tldr = resourceDoc
+      ? `Bạn đang đọc **${resourceDoc.title.split(':')[0]}** (${genreGuess}) và bám vào chi tiết: **${extractShortSummary(cleanedMessage, 60)}**.`
+      : matchedAlias
+        ? `Phát hiện tín hiệu văn bản liên quan mục **${matchedAlias.docId}** (${genreGuess}): "${extractShortSummary(cleanedMessage, 58)}".`
+        : `Bạn vừa đưa đoạn văn bản / cảm nhận (${genreGuess}) vào để đọc chậm: "${extractShortSummary(cleanedMessage, 58)}".`;
+
+    positivePoints = [
+      'Bạn bắt đầu trực tiếp từ cảm nhận và chi tiết cụ thể thay vì học thuộc văn mẫu.',
+      ...(devices.length > 0 ? [`Nhận ra dấu hiệu hình thức đáng chú ý: ${devices.join(', ')}.`] : []),
+    ].slice(0, 2);
+    negativePoints = [
+      devices.length > 0
+        ? 'Đừng chỉ gọi tên biện pháp tu từ — cần giải thích nó tạo ra hiệu quả thẩm mĩ và tâm lí gì.'
+        : 'Cần trích rõ 2–3 từ ngữ, hình ảnh hoặc chi tiết cụ thể trong văn bản làm điểm tựa diễn giải.',
+    ];
+
+    const stepQuestions = [
+      'Văn bản thuộc thể loại nào và đặc trưng thể loại ấy gợi ý em nên chú ý yếu tố nào trước tiên (vần nhịp, điểm nhìn, xung đột hay chi tiết)?',
+      'Chi tiết, câu thơ hoặc từ ngữ nào khiến em dừng lại lâu nhất và vì sao?',
+      'Các chi tiết ấy có lặp lại, đối lập hay biến đổi theo một quy luật nghệ thuật nào không?',
+      'Từ quy luật nghệ thuật đó, em diễn giải ý nghĩa chủ đề ra sao và căn cứ nằm ở câu chữ nào?',
+      'Hãy tự viết 3–5 câu cảm nhận hoàn chỉnh theo mạch: luận điểm → chi tiết → phân tích → nhận xét.',
+    ];
+
+    const stepLabel =
+      nextUserTurn <= 1
+        ? 'Bước 1/5 (Xác định thể loại)'
+        : nextUserTurn === 2
+          ? 'Bước 2/5 (Đọc chi tiết)'
+          : nextUserTurn === 3
+            ? 'Bước 3/5 (Tìm quy luật nghệ thuật)'
+            : nextUserTurn === 4
+              ? 'Bước 4/5 (Diễn giải có căn cứ)'
+              : 'Bước 5/5 (Viết đoạn cảm nhận)';
+
+    interpretation = `- **${stepLabel}:** ${
+      devices.length > 0
+        ? `Chú ý ${devices.join('; ')} trong đoạn bạn nêu — hãy đặt nó trong mối quan hệ với mạch cảm xúc hoặc tình huống truyện.`
+        : 'Đọc văn học bắt đầu từ câu chữ trên trang giấy: khoanh lại 2 từ ngữ hoặc chi tiết lạ nhất trước khi khái quát ý nghĩa.'
+    }`;
+    guidingQuestion = adaptQuestionForDifficulty(
+      resourceDoc?.thinkingQuestions?.[Math.min(nextUserTurn - 1, Math.max(0, (resourceDoc.thinkingQuestions.length || 1) - 1))] ??
+        stepQuestions[Math.min(nextUserTurn - 1, 4)],
+      difficulty
+    );
+    questionHint = 'Gợi ý: Trích nguyên 1 cụm từ hoặc chi tiết cụ thể trong văn bản rồi nêu hiệu quả của nó.';
+    aiClaimSummary = `Hướng dẫn đọc sâu văn bản (${stepLabel}) theo đặc trưng thể loại.`;
   } else {
     // Debate Lab synchronized with 5 stages
     if (nextUserTurn === 1) {

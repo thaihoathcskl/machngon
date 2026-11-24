@@ -7,6 +7,9 @@
     "api/generate.js": {
       "maxDuration": 30
     },
+    "api/v2-ask.js": {
+      "maxDuration": 30
+    },
     "api/index.ts": {
       "maxDuration": 30
     }
@@ -17,7 +20,11 @@
       "destination": "/api/generate.js"
     },
     {
-      "source": "/api/((?!generate$).*)",
+      "source": "/api/v2-ask",
+      "destination": "/api/v2-ask.js"
+    },
+    {
+      "source": "/api/((?!generate$|v2-ask$).*)",
       "destination": "/api/index.ts"
     },
     {

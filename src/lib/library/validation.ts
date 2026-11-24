@@ -2,6 +2,7 @@ import { LEGACY_CATEGORY_MAP } from '../../content/library/categories.ts';
 import type {
   DocumentBlock,
   DocumentCategory,
+  DocumentSection,
   LabDifficultyLevel,
   LibraryDocument,
 } from '../types.ts';
@@ -15,8 +16,8 @@ export function normalizeCategoryName(category: string): DocumentCategory {
 }
 
 /**
- * Estimates academic Vietnamese reading time from actual document content (~175 words/min
- * for deliberate reflective reading, clamped to a minimum of 3 minutes).
+ * Computes actual Vietnamese reading duration directly from document text:
+ * Math.max(1, Math.ceil(wordCount / 200))
  */
 export function estimateReadingMinutes(blocks: DocumentBlock[], excerpt = ''): number {
   const fullText = [
@@ -27,8 +28,8 @@ export function estimateReadingMinutes(blocks: DocumentBlock[], excerpt = ''): n
     .trim()
     .split(/\s+/)
     .filter(Boolean).length;
-  if (words === 0) return 3;
-  return Math.max(3, Math.round(words / 175));
+  if (words === 0) return 1;
+  return Math.max(1, Math.ceil(words / 200));
 }
 
 export function isSafeHttpUrl(url?: string): boolean {
@@ -41,34 +42,116 @@ export function isSafeHttpUrl(url?: string): boolean {
   }
 }
 
+/**
+ * Transparent verification standard:
+ * A document is marked "Đã kiểm chứng nguồn" ONLY when it is verified, not in editing/pending_source,
+ * and contains at least 2 verified academic references.
+ */
 export function isDocumentVerified(doc: LibraryDocument): boolean {
   if (doc.verified !== true) return false;
   if (doc.reviewStatus === 'editing' || doc.reviewStatus === 'pending_source') return false;
   const refs = doc.references ?? [];
-  return refs.some((ref) => ref.verified);
+  const verifiedCount = refs.filter((ref) => ref.verified).length;
+  return verifiedCount >= 2;
+}
+
+/**
+ * Deterministic anchor ID for heading blocks so TOC links match rendered headings 100% across all documents.
+ */
+export function getBlockHeadingAnchorId(headingOrdinal: number): string {
+  return `sec-${headingOrdinal}`;
+}
+
+export interface DerivedTocItem extends DocumentSection {
+  blockId: string;
+}
+
+/**
+ * Automatically derives the Table of Contents from all actual heading blocks in a document.
+ * Guarantees 100% parity between TOC entries and section headings (zero stale or missing sections).
+ */
+export function deriveDocumentToc(doc: LibraryDocument): DerivedTocItem[] {
+  const items: DerivedTocItem[] = [];
+  let ordinal = 0;
+  for (const block of doc.blocks) {
+    const heading = block.heading?.trim();
+    if (!heading) continue;
+    ordinal += 1;
+    items.push({
+      id: getBlockHeadingAnchorId(ordinal),
+      title: `${ordinal}. ${heading}`,
+      blockId: block.id,
+    });
+  }
+  if (items.length > 0) return items;
+  return (doc.sections ?? []).map((sec, idx) => ({
+    id: sec.id || getBlockHeadingAnchorId(idx + 1),
+    title: sec.title,
+    blockId: doc.blocks[idx]?.id ?? sec.id,
+  }));
 }
 
 export function getDifficultyLabel(difficulty?: LibraryDocument['difficulty']): string {
   switch (difficulty) {
     case 'intro':
-      return 'Cơ bản';
+      return 'Nhập môn (Cơ bản)';
     case 'advanced':
-      return 'Nâng cao';
+      return 'Chuyên sâu (Nâng cao)';
     case 'explore':
     default:
-      return 'Trung cấp';
+      return 'Khám phá (Trung cấp)';
+  }
+}
+
+export function getDifficultyShortLabel(difficulty?: LibraryDocument['difficulty']): string {
+  switch (difficulty) {
+    case 'intro':
+      return 'Nhập môn';
+    case 'advanced':
+      return 'Chuyên sâu';
+    case 'explore':
+    default:
+      return 'Khám phá';
+  }
+}
+
+export function getDifficultyTone(difficulty?: LibraryDocument['difficulty']): {
+  bg: string;
+  text: string;
+  border: string;
+} {
+  switch (difficulty) {
+    case 'intro':
+      return {
+        bg: 'color-mix(in srgb, var(--color-success) 12%, var(--color-surface) 88%)',
+        text: 'var(--color-success)',
+        border: 'color-mix(in srgb, var(--color-success) 32%, var(--color-border) 68%)',
+      };
+    case 'advanced':
+      return {
+        bg: 'color-mix(in srgb, var(--color-primary) 12%, var(--color-surface) 88%)',
+        text: 'var(--color-primary)',
+        border: 'color-mix(in srgb, var(--color-primary) 32%, var(--color-border) 68%)',
+      };
+    case 'explore':
+    default:
+      return {
+        bg: 'color-mix(in srgb, var(--color-gold) 14%, var(--color-surface) 86%)',
+        text: 'var(--color-gold)',
+        border: 'color-mix(in srgb, var(--color-gold) 36%, var(--color-border) 64%)',
+      };
   }
 }
 
 export function getLabDifficultyLabel(difficulty?: LabDifficultyLevel): string {
   switch (difficulty) {
     case 'basic':
-      return 'Cơ bản';
+      return 'Người mới bắt đầu';
     case 'advanced':
-      return 'Nâng cao';
+      return 'Chuyên gia';
     case 'intermediate':
     default:
-      return 'Trung cấp';
+      return 'Tầm trung';
   }
 }
 

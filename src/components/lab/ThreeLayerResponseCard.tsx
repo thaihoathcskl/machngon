@@ -6,6 +6,9 @@ import {
   ChevronUp,
   Compass,
   CornerDownRight,
+  ExternalLink,
+  Flag,
+  Globe,
   Map as MapIcon,
   Quote,
   ShieldAlert,
@@ -28,6 +31,8 @@ interface ThreeLayerResponseCardProps {
   onSpeakMessage?: (textToSpeak: string, messageId: string) => void;
   /** Whether this specific message is currently being spoken aloud */
   isSpeaking?: boolean;
+  /** Optional callback to flag inaccurate AI responses */
+  onFlagMessage?: (message: LabMessage, note: string) => void;
 }
 
 /**
@@ -143,15 +148,31 @@ function isThinkingTraceMap(text: string): boolean {
   );
 }
 
+function getSafeExternalSourceUrl(rawUrl?: string): string | null {
+  if (typeof rawUrl !== 'string') return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function ThreeLayerResponseCard({
   message,
   onQuoteToComposer,
   animateTyping = false,
   onSpeakMessage,
   isSpeaking = false,
+  onFlagMessage,
 }: ThreeLayerResponseCardProps) {
   const layers = message.threeLayer;
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [flagOpen, setFlagOpen] = useState(false);
+  const [flagNote, setFlagNote] = useState('');
+  const [flagged, setFlagged] = useState(false);
 
   const openingText = useMemo(() => resolveOpeningText(message), [message]);
   const fullBodyText = useMemo(() => {
@@ -216,6 +237,29 @@ export function ThreeLayerResponseCard({
     (layers && (layers.assumptions.trim().length > 0 || layers.facts.trim().length > 0)) ||
       (message.debateSteps && message.debateSteps.length > 0)
   );
+
+  const validSources = useMemo(() => {
+    if (!Array.isArray(message.sources) || message.sources.length === 0) return [];
+    const seen = new Set<string>();
+    const list: Array<{ title: string; url: string; domain: string }> = [];
+    for (const src of message.sources) {
+      const safeUrl = getSafeExternalSourceUrl(src?.uri || src?.url);
+      if (!safeUrl || seen.has(safeUrl)) continue;
+      seen.add(safeUrl);
+      let domain = safeUrl;
+      try {
+        domain = new URL(safeUrl).hostname.replace(/^www\./, '');
+      } catch {
+        // Keep safeUrl
+      }
+      list.push({
+        title: (src?.title || '').trim() || domain,
+        url: safeUrl,
+        domain,
+      });
+    }
+    return list;
+  }, [message.sources]);
 
   return (
     <article
@@ -344,7 +388,7 @@ export function ThreeLayerResponseCard({
           )}
         </div>
 
-        {/* Balanced Critique Grid: Điểm tích cực & Điểm hạn chế / Cần phản biện */}
+        {/* Balanced Critique Grid: Góp ý tích cực (Điểm mạnh) & Phản biện / Góp ý tiêu cực (Điểm hở) */}
         {hasBalancedCritique && !isStreaming && layers && (
           <div
             data-testid="balanced-critique-box"
@@ -354,7 +398,7 @@ export function ThreeLayerResponseCard({
               <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5 space-y-1.5">
                 <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
                   <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                  <span>Điểm tích cực / hợp lý</span>
+                  <span>Góp ý tích cực (Điểm mạnh)</span>
                 </div>
                 <ul className="space-y-1 text-xs sm:text-[13px] leading-relaxed text-[var(--color-text)] list-disc pl-4">
                   {layers.positivePoints.map((pt, idx) => (
@@ -368,7 +412,7 @@ export function ThreeLayerResponseCard({
               <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5 space-y-1.5">
                 <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-gold)]">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                  <span>Điểm hạn chế / cần phản biện</span>
+                  <span>Phản biện / Góp ý tiêu cực (Điểm hở)</span>
                 </div>
                 <ul className="space-y-1 text-xs sm:text-[13px] leading-relaxed text-[var(--color-text)] list-disc pl-4">
                   {layers.negativePoints.map((pt, idx) => (
@@ -492,30 +536,134 @@ export function ThreeLayerResponseCard({
           </motion.blockquote>
         )}
 
-        {/* Subtle Progressive Disclosure for Underlying Assumptions & 5-Step Trace */}
-        {hasDetailsDrawer && !isStreaming && (
-          <div className="pt-0.5">
-            <button
-              type="button"
-              onClick={() => setDetailsOpen((prev) => !prev)}
-              aria-expanded={detailsOpen}
-              className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition-colors whitespace-nowrap cursor-pointer"
-            >
-              <Compass className="h-3.5 w-3.5 shrink-0" />
-              <span>
-                {detailsOpen
-                  ? 'Ẩn phân tích căn cứ & 5 bước'
-                  : 'Soi căn cứ, giả định ngầm & 5 bước'}
+        {/* Grounding Sources List (from /api/v2-ask Google Search) */}
+        {!isStreaming && validSources.length > 0 && (
+          <section
+            data-testid="ai-sources-list"
+            aria-label="Nguồn tham khảo từ Google Search"
+            className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)]/60 px-3.5 py-3 space-y-2"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-text)]">
+                <Globe className="h-3.5 w-3.5 text-[var(--color-primary)] shrink-0" />
+                <span>Nguồn tham khảo ({validSources.length})</span>
               </span>
-              {detailsOpen ? (
-                <ChevronUp className="h-3.5 w-3.5" />
+              <span className="text-[10.5px] font-medium text-[var(--color-text-muted)]">
+                Google Search
+              </span>
+            </div>
+
+            <ul className="space-y-1.5">
+              {validSources.map((source, idx) => (
+                <li key={source.url} className="min-w-0">
+                  <a
+                    href={source.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={source.url}
+                    className="group/link flex items-center justify-between gap-2 rounded-lg border border-transparent bg-[var(--color-surface)]/80 px-2.5 py-1.5 text-xs transition-colors hover:border-[var(--color-primary)]/40 hover:bg-[var(--color-surface)] min-w-0"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono-num text-[11px] font-semibold text-[var(--color-primary)] shrink-0">
+                        [{idx + 1}]
+                      </span>
+                      <span className="font-medium text-[var(--color-text)] group-hover/link:text-[var(--color-primary)] truncate">
+                        {source.title}
+                      </span>
+                    </div>
+                    <span className="inline-flex items-center gap-1 text-[11px] text-[var(--color-text-muted)] shrink-0">
+                      <span className="hidden sm:inline max-w-[140px] truncate">
+                        {source.domain}
+                      </span>
+                      <ExternalLink className="h-3 w-3 group-hover/link:text-[var(--color-primary)] shrink-0" />
+                    </span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {/* Subtle Footer Row: Progressive Disclosure + Flag Inaccurate AI Answer */}
+        {!isStreaming && (hasDetailsDrawer || onFlagMessage) && (
+          <div className="pt-0.5 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {hasDetailsDrawer ? (
+                <button
+                  type="button"
+                  onClick={() => setDetailsOpen((prev) => !prev)}
+                  aria-expanded={detailsOpen}
+                  className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <Compass className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {detailsOpen
+                      ? 'Ẩn phân tích căn cứ & 5 bước'
+                      : 'Soi căn cứ, giả định ngầm & 5 bước'}
+                  </span>
+                  {detailsOpen ? (
+                    <ChevronUp className="h-3.5 w-3.5" />
+                  ) : (
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  )}
+                </button>
               ) : (
-                <ChevronDown className="h-3.5 w-3.5" />
+                <span />
               )}
-            </button>
+
+              {onFlagMessage && (
+                <button
+                  type="button"
+                  disabled={flagged}
+                  data-testid="flag-ai-response-btn"
+                  onClick={() => setFlagOpen((prev) => !prev)}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-gold)] disabled:opacity-60 transition-colors cursor-pointer"
+                >
+                  <Flag className="h-3 w-3 shrink-0" />
+                  <span>{flagged ? 'Đã ghi nhận góp ý' : 'Báo câu trả lời chưa đúng'}</span>
+                </button>
+              )}
+            </div>
+
+            {flagOpen && onFlagMessage && !flagged && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  onFlagMessage(
+                    message,
+                    flagNote.trim() || 'Người dùng đánh dấu câu trả lời AI chưa chính xác.'
+                  );
+                  setFlagged(true);
+                  setFlagOpen(false);
+                  setFlagNote('');
+                }}
+                className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5 text-xs"
+              >
+                <input
+                  type="text"
+                  value={flagNote}
+                  onChange={(e) => setFlagNote(e.target.value)}
+                  placeholder="Mô tả ngắn điểm chưa chính xác (tuỳ chọn)…"
+                  className="flex-1 min-w-[180px] rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-xs text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
+                />
+                <button
+                  type="submit"
+                  className="rounded-lg bg-[var(--color-primary)] px-3 py-1.5 text-[11px] font-semibold text-[var(--color-on-primary)] cursor-pointer"
+                >
+                  Gửi báo lỗi
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFlagOpen(false)}
+                  className="rounded-lg px-2 py-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] cursor-pointer"
+                >
+                  Hủy
+                </button>
+              </form>
+            )}
 
             <AnimatePresence initial={false}>
-              {detailsOpen && (
+              {detailsOpen && hasDetailsDrawer && (
                 <motion.div
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: 'auto', opacity: 1 }}

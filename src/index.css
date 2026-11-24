@@ -40,6 +40,13 @@
   --color-danger: #9B3636;
   --color-success: #2C5E44;
 
+  /* Toulmin Argument Role Tokens (Light Mode) */
+  --c-claim: #8B2635;
+  --c-ground: #1F5E78;
+  --c-warrant: #6B4C9A;
+  --c-qual: #8F6118;
+  --c-reb: #2C6B4F;
+
   /* Layout & Geometry Tokens */
   --container-max: 1360px;
   --radius-sm: 0.5rem;
@@ -90,6 +97,13 @@
   --shadow-float: 0 16px 40px -12px rgba(0, 0, 0, 0.56);
   --color-danger: #E07A7A;
   --color-success: #6EB88D;
+
+  /* Toulmin Argument Role Tokens (Dark Mode high legibility) */
+  --c-claim: #EA8F9C;
+  --c-ground: #74BDD9;
+  --c-warrant: #C3A6EA;
+  --c-qual: #E3B66A;
+  --c-reb: #76CE9E;
 }
 
 @layer base {
@@ -100,6 +114,7 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     scroll-behavior: smooth;
+    overflow-x: clip;
     transition: background-color 280ms var(--ease-editorial), color 280ms var(--ease-editorial);
   }
 
@@ -107,7 +122,7 @@
     background-color: var(--color-bg);
     color: var(--color-text);
     min-height: 100dvh;
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   /* Optical compensation in dark mode for crisp legibility */
@@ -432,3 +447,75 @@
     scroll-behavior: auto !important;
   }
 }
+
+@media print {
+  header,
+  nav,
+  aside,
+  footer,
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #1f1a17 !important;
+  }
+
+  .surface-card,
+  .surface-subtle {
+    box-shadow: none !important;
+    border-color: #d6cfc4 !important;
+    background: #ffffff !important;
+  }
+}
+
+/* ==========================================================================
+   V2 Toulmin Sentence Highlighter & Interactive Pedagogy Helpers
+   ========================================================================== */
+
+.toulmin-sent {
+  cursor: pointer;
+  border-radius: 0.3rem;
+  padding: 0.08rem 0.22rem;
+  margin-right: 0.15rem;
+  border-bottom: 2px dashed color-mix(in srgb, var(--color-border) 85%, transparent);
+  transition: background-color var(--duration-fast) var(--ease-editorial),
+    border-color var(--duration-fast) var(--ease-editorial);
+}
+
+.toulmin-sent:hover {
+  background-color: color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+
+.toulmin-sent[data-role="claim"] {
+  background-color: color-mix(in srgb, var(--c-claim) 16%, transparent);
+  border-bottom: 2px solid var(--c-claim);
+}
+
+.toulmin-sent[data-role="ground"] {
+  background-color: color-mix(in srgb, var(--c-ground) 16%, transparent);
+  border-bottom: 2px solid var(--c-ground);
+}
+
+.toulmin-sent[data-role="warrant"] {
+  background-color: color-mix(in srgb, var(--c-warrant) 16%, transparent);
+  border-bottom: 2px solid var(--c-warrant);
+}
+
+.toulmin-sent[data-role="qual"] {
+  background-color: color-mix(in srgb, var(--c-qual) 18%, transparent);
+  border-bottom: 2px solid var(--c-qual);
+}
+
+.toulmin-sent[data-role="reb"] {
+  background-color: color-mix(in srgb, var(--c-reb) 16%, transparent);
+  border-bottom: 2px solid var(--c-reb);
+}
+
+.toulmin-sent[data-mismatch="true"] {
+  outline: 1.5px dashed var(--color-gold);
+  outline-offset: 2px;
+}
+
+

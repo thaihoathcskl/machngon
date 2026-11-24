@@ -245,8 +245,15 @@ export function buildConversationContextPrompt(payload: LabApiRequestPayload): s
   const cleanedMessage = cleanSpokenVietnameseFillers(payload.message);
   const difficultyLabel = getLabDifficultyLabel(payload.difficulty);
 
+  const modeTitle =
+    payload.lab_type === 'concept'
+      ? 'Concept Lab (Khám phá khái niệm)'
+      : payload.lab_type === 'read'
+        ? 'Đọc văn bản văn học (Literary Close-Reading)'
+        : 'Debate Lab (Tranh biện Socrates)';
+
   parts.push(
-    `TRẠNG THÁI PHIÊN: Chế độ ${payload.lab_type === 'concept' ? 'Concept Lab (Khám phá khái niệm)' : 'Debate Lab (Tranh biện Socrates)'} · Cấp độ: ${difficultyLabel} · Lượt học sinh thứ ${userTurnCount} · ${stageMeta.label}.`
+    `TRẠNG THÁI PHIÊN: Chế độ ${modeTitle} · Cấp độ: ${difficultyLabel} · Lượt học sinh thứ ${userTurnCount} · ${stageMeta.label}.`
   );
   parts.push(`NHỊP DẪN DẮT HIỆN TẠI: ${stageMeta.directive}`);
 

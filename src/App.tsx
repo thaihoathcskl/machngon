@@ -1,20 +1,21 @@
-import React, { lazy, Suspense, useEffect, useRef } from 'react';
+import React, { lazy, Suspense, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { QuickDictionarySuite } from './components/dictionary/QuickDictionarySuite';
 import { PaletteQuickModal } from './components/theme/PaletteQuickModal';
 import { ThemeProvider } from './components/theme/ThemeProvider';
-import { ToastProvider, useToast } from './components/ui/ToastProvider';
+import { ToastProvider } from './components/ui/ToastProvider';
 import { AppProvider, useApp } from './lib/AppContext';
 import {
-  AUTH_REQUIRED_NOTICE,
   buildAuthRedirectUrl,
   isProtectedRoute,
   normalizeRoutePath,
 } from './lib/authGuard';
 import { RouterProvider, useRouter } from './lib/router';
+import { AboutPage } from './pages/AboutPage';
 import { AuthPage } from './pages/AuthPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { DocumentDetailPage } from './pages/DocumentDetailPage';
+import { GlossaryPage } from './pages/GlossaryPage';
 import { GuidePage } from './pages/GuidePage';
 import { HistoryPage } from './pages/HistoryPage';
 import { HomePage } from './pages/HomePage';
@@ -22,6 +23,7 @@ import { LabPage } from './pages/LabPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { OnboardingPage } from './pages/OnboardingPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { KeyboardShortcutsModal } from './components/ui/KeyboardShortcutsModal';
 
 // Code-split /admin editorial console for leaner initial load
 const AdminPage = lazy(() => import('./pages/AdminPage'));
@@ -29,25 +31,22 @@ const AdminPage = lazy(() => import('./pages/AdminPage'));
 function RouteView() {
   const { pathname, search, navigate } = useRouter();
   const { user } = useApp();
-  const { showToast } = useToast();
-  const lastRedirectKeyRef = useRef<string | null>(null);
 
   const normalizedPath = normalizeRoutePath(pathname);
-  const blockedByAuth = !user.isAuthenticated && isProtectedRoute(normalizedPath);
+  const effectivePath = normalizedPath === '/survey' ? '/onboarding' : normalizedPath;
+  const blockedByAuth = !user.isAuthenticated && isProtectedRoute(effectivePath);
 
   useEffect(() => {
-    if (!blockedByAuth) {
-      lastRedirectKeyRef.current = null;
+    if (normalizedPath === '/survey' && user.isAuthenticated) {
+      navigate('/onboarding', { replace: true });
       return;
     }
-
-    const redirectKey = `${normalizedPath}${search}`;
-    if (lastRedirectKeyRef.current !== redirectKey) {
-      lastRedirectKeyRef.current = redirectKey;
-      showToast(AUTH_REQUIRED_NOTICE, { variant: 'info' });
+    if (!blockedByAuth) {
+      return;
     }
-    navigate(buildAuthRedirectUrl(normalizedPath, search), { replace: true });
-  }, [blockedByAuth, normalizedPath, search, navigate, showToast]);
+    // Single inline notice is displayed by AuthPage — no duplicate toast here
+    navigate(buildAuthRedirectUrl(effectivePath, search), { replace: true });
+  }, [blockedByAuth, normalizedPath, effectivePath, search, navigate, user.isAuthenticated]);
 
   let pageNode: React.ReactNode;
 
@@ -55,31 +54,35 @@ function RouteView() {
     pageNode = (
       <AuthPage
         forcedReason="auth_required"
-        forcedRedirect={`${normalizedPath}${search}`}
+        forcedRedirect={`${effectivePath}${search}`}
       />
     );
-  } else if (normalizedPath === '/') {
+  } else if (effectivePath === '/') {
     pageNode = <HomePage />;
-  } else if (normalizedPath === '/auth') {
+  } else if (effectivePath === '/about') {
+    pageNode = <AboutPage />;
+  } else if (effectivePath === '/auth') {
     pageNode = <AuthPage />;
-  } else if (normalizedPath === '/onboarding') {
+  } else if (effectivePath === '/onboarding') {
     pageNode = <OnboardingPage />;
-  } else if (normalizedPath === '/dashboard') {
+  } else if (effectivePath === '/dashboard') {
     pageNode = <DashboardPage />;
-  } else if (normalizedPath === '/library') {
+  } else if (effectivePath === '/library') {
     pageNode = <LibraryPage />;
-  } else if (normalizedPath.startsWith('/library/')) {
-    const docId = decodeURIComponent(normalizedPath.slice('/library/'.length));
+  } else if (effectivePath.startsWith('/library/')) {
+    const docId = decodeURIComponent(effectivePath.slice('/library/'.length));
     pageNode = <DocumentDetailPage documentId={docId} />;
-  } else if (normalizedPath === '/lab') {
+  } else if (effectivePath === '/glossary') {
+    pageNode = <GlossaryPage />;
+  } else if (effectivePath === '/lab') {
     pageNode = <LabPage />;
-  } else if (normalizedPath === '/guide') {
+  } else if (effectivePath === '/guide') {
     pageNode = <GuidePage />;
-  } else if (normalizedPath === '/history') {
+  } else if (effectivePath === '/history') {
     pageNode = <HistoryPage />;
-  } else if (normalizedPath === '/profile') {
+  } else if (effectivePath === '/profile') {
     pageNode = <ProfilePage />;
-  } else if (normalizedPath === '/admin') {
+  } else if (effectivePath === '/admin') {
     pageNode = (
       <Suspense
         fallback={
@@ -97,7 +100,7 @@ function RouteView() {
 
   return (
     <motion.div
-      key={blockedByAuth ? '/auth' : normalizedPath}
+      key={blockedByAuth ? '/auth' : effectivePath}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
@@ -116,6 +119,7 @@ export default function App() {
             <RouteView />
             <PaletteQuickModal />
             <QuickDictionarySuite />
+            <KeyboardShortcutsModal />
           </RouterProvider>
         </AppProvider>
       </ToastProvider>

@@ -4,6 +4,7 @@ import { resolveEditorialAsset } from '../../lib/assets';
 
 interface LibraryHeroProps {
   totalDocs: number;
+  verifiedDocsCount?: number;
   totalCategories: number;
   totalCollections: number;
   totalConcepts: number;
@@ -13,15 +14,14 @@ interface LibraryHeroProps {
 
 export function LibraryHero({
   totalDocs,
+  verifiedDocsCount,
   totalCategories,
   totalCollections,
   totalConcepts,
   onJumpToCatalog,
   onJumpToCollections,
 }: LibraryHeroProps) {
-  const heroBg = resolveEditorialAsset(
-    '/src/assets/images/cover_library_reading_hall_1795261276717.jpg'
-  );
+  const heroBg = resolveEditorialAsset('/assets/images/cover_lib.jpg');
 
   return (
     <section
@@ -48,7 +48,7 @@ export function LibraryHero({
         <div className="max-w-3xl">
           <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-gold)]">
             <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
-            Mạch Ngôn AI Library · Học liệu kiểm chứng
+            Mạch Ngôn AI Library · Học liệu chọn lọc
           </p>
 
           <h1 className="mt-2.5 font-display lib-scale-hero-title font-bold tracking-tight text-[var(--color-text)]">
@@ -57,15 +57,20 @@ export function LibraryHero({
 
           <p className="mt-3.5 font-reading lib-scale-lead text-[var(--color-text-muted)] max-w-2xl">
             Kho chuyên luận độc lập về ngôn ngữ, văn học, triết học, logic và tư duy phản biện —
-            được phân cấp rõ theo 3 mức Cơ bản, Trung cấp và Nâng cao kèm thuật ngữ tương tác
-            và nguồn tham khảo đã kiểm chứng.
+            phân cấp rõ theo 3 mức Nhập môn, Khám phá và Chuyên sâu kèm thuật ngữ tương tác
+            và đối chiếu nguồn minh bạch.
           </p>
 
           {/* Honest, live platform inventory counts (no fake user metrics) */}
           <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2.5 text-sm text-[var(--color-text-muted)]">
             <span className="inline-flex items-center gap-1.5 font-medium text-[var(--color-text)]">
               <BookOpen className="h-4 w-4 text-[var(--color-primary)]" aria-hidden="true" />
-              <strong className="font-mono-num">{totalDocs}</strong> bài đọc chuyên sâu
+              <strong className="font-mono-num">{totalDocs}</strong> bài đọc
+              {typeof verifiedDocsCount === 'number' && (
+                <span className="text-xs font-normal text-[var(--color-text-muted)]">
+                  ({verifiedDocsCount} đạt chuẩn ≥2 nguồn kiểm chứng)
+                </span>
+              )}
             </span>
             <span className="inline-flex items-center gap-1.5">
               <Layers className="h-4 w-4 text-[var(--color-gold)]" aria-hidden="true" />

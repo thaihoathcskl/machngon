@@ -1,6 +1,6 @@
 import { LIBRARY_CONCEPTS } from '../content/library/concepts.ts';
-import { AIRateLimitError, AIServiceError, generateWithAI } from '../services/aiService.ts';
-import type { LabDifficultyLevel } from './types.ts';
+import { AIRateLimitError, AIServiceError, askV2WithSearch } from '../services/aiService.ts';
+import type { GroundingSource, LabDifficultyLevel } from './types.ts';
 import { normalizeVietnamese } from './vietnamese.ts';
 
 export interface DictionaryEntry {
@@ -8,9 +8,11 @@ export interface DictionaryEntry {
   englishTerm?: string;
   category: string;
   definition: string;
+  contextMeaning?: string;
   example?: string;
   source: 'local-glossary' | 'ai-api';
   relatedDocumentIds?: string[];
+  sources?: GroundingSource[];
 }
 
 interface BuiltInGlossaryTerm {
@@ -128,7 +130,7 @@ export function lookupLocalDictionary(rawTerm: string): DictionaryEntry | null {
   if (cleanTerm.length < 2) return null;
   const normQuery = normalizeVietnamese(cleanTerm);
 
-  // 1. Exact or alias match in LIBRARY_CONCEPTS
+  // 1a. Exact match in LIBRARY_CONCEPTS (230 machngon-v2 glossary terms)
   for (const concept of LIBRARY_CONCEPTS) {
     const candidates = [
       concept.term,
@@ -138,7 +140,7 @@ export function lookupLocalDictionary(rawTerm: string): DictionaryEntry | null {
       .filter(Boolean)
       .map((s) => normalizeVietnamese(s));
 
-    if (candidates.some((c) => c === normQuery || (normQuery.length >= 3 && (c.includes(normQuery) || normQuery.includes(c))))) {
+    if (candidates.some((c) => c === normQuery)) {
       return {
         term: concept.term,
         englishTerm: concept.englishTerm,
@@ -151,13 +153,13 @@ export function lookupLocalDictionary(rawTerm: string): DictionaryEntry | null {
     }
   }
 
-  // 2. Built-in academic glossary
+  // 1b. Exact match in built-in academic glossary
   for (const item of BUILTIN_ACADEMIC_GLOSSARY) {
     const candidates = [item.term, item.englishTerm ?? '', ...(item.aliases ?? [])]
       .filter(Boolean)
       .map((s) => normalizeVietnamese(s));
 
-    if (candidates.some((c) => c === normQuery || (normQuery.length >= 3 && (c.includes(normQuery) || normQuery.includes(c))))) {
+    if (candidates.some((c) => c === normQuery)) {
       return {
         term: item.term,
         englishTerm: item.englishTerm,
@@ -166,6 +168,56 @@ export function lookupLocalDictionary(rawTerm: string): DictionaryEntry | null {
         example: item.example,
         source: 'local-glossary',
       };
+    }
+  }
+
+  // 2. Partial match only for meaningful phrases (>= 4 chars) and terms >= 4 chars
+  if (normQuery.length >= 4) {
+    for (const concept of LIBRARY_CONCEPTS) {
+      const candidates = [
+        concept.term,
+        concept.englishTerm ?? '',
+        ...(concept.matchAliases ?? []),
+      ]
+        .filter(Boolean)
+        .map((s) => normalizeVietnamese(s));
+
+      if (
+        candidates.some(
+          (c) => c.length >= 4 && (c.includes(normQuery) || normQuery.includes(c))
+        )
+      ) {
+        return {
+          term: concept.term,
+          englishTerm: concept.englishTerm,
+          category: concept.category,
+          definition: concept.shortDefinition,
+          example: concept.example,
+          source: 'local-glossary',
+          relatedDocumentIds: concept.documentIds,
+        };
+      }
+    }
+
+    for (const item of BUILTIN_ACADEMIC_GLOSSARY) {
+      const candidates = [item.term, item.englishTerm ?? '', ...(item.aliases ?? [])]
+        .filter(Boolean)
+        .map((s) => normalizeVietnamese(s));
+
+      if (
+        candidates.some(
+          (c) => c.length >= 4 && (c.includes(normQuery) || normQuery.includes(c))
+        )
+      ) {
+        return {
+          term: item.term,
+          englishTerm: item.englishTerm,
+          category: item.category,
+          definition: item.definition,
+          example: item.example,
+          source: 'local-glossary',
+        };
+      }
     }
   }
 
@@ -193,6 +245,7 @@ export async function explainTermQuickly(
   rawTerm: string,
   options?: {
     contextSnippet?: string;
+    articleTitle?: string;
     difficulty?: LabDifficultyLevel;
     forceAI?: boolean;
   }
@@ -207,41 +260,48 @@ export async function explainTermQuickly(
 
   const localHit = lookupLocalDictionary(cleanTerm);
   if (localHit && !options?.forceAI) {
-    return { entry: localHit };
+    return {
+      entry: {
+        ...localHit,
+        contextMeaning: options?.contextSnippet?.trim()
+          ? `Trong câu đang đọc (“${options.contextSnippet.trim().slice(0, 130)}${options.contextSnippet.trim().length > 130 ? '…' : ''}”), thuật ngữ này giữ vai trò làm rõ khái niệm nền của lập luận.`
+          : undefined,
+      },
+    };
   }
 
   const levelInstruction =
     options?.difficulty === 'advanced'
-      ? 'Giải thích ở mức Nâng cao: chặt chẽ về học thuật, nêu sắc thái khái niệm và 1 ví dụ phân tích ngắn.'
+      ? 'Giải thích ở mức Chuyên gia: chặt chẽ về học thuật, nêu sắc thái khái niệm và 1 ví dụ phân tích ngắn.'
       : options?.difficulty === 'basic'
-        ? 'Giải thích ở mức Cơ bản: thật dễ hiểu bằng tiếng Việt đời thường cho học sinh THPT, kèm 1 ví dụ gần gũi.'
-        : 'Giải thích ở mức Trung cấp: rõ ràng, chuẩn xác, kèm 1 ví dụ cụ thể.';
+        ? 'Giải thích ở mức Người mới bắt đầu: thật dễ hiểu bằng tiếng Việt đời thường, kèm 1 ví dụ gần gũi.'
+        : 'Giải thích ở mức Tầm trung: rõ ràng, chuẩn xác, kèm 1 ví dụ cụ thể.';
 
   const systemInstruction = [
-    'Bạn là Từ điển tư duy Mạch Ngôn chuyên giải thích nhanh từ vựng khó, thuật ngữ học thuật và cụm từ ngữ cảnh bằng tiếng Việt.',
+    'Bạn là AI Library — Từ điển học thuật Mạch Ngôn chuyên giải thích nhanh từ vựng khó và cụm từ theo đúng ngữ cảnh bài đọc (không tranh biện).',
     levelInstruction,
-    'Trả lời cực gọn theo đúng 2 dòng:',
-    '- Nghĩa: 1–2 câu súc tích đi thẳng vào bản chất từ/cụm từ.',
-    '- Ví dụ: 1 câu ví dụ đời thực hoặc học thuật ngắn gọn.',
-    'Không chào hỏi, không lan man, không quá 70 từ.',
+    'Trả lời gọn 3 dòng:',
+    '- Nghĩa: 1–2 câu định nghĩa cốt lõi dễ hiểu.',
+    '- Trong ngữ cảnh: 1 câu giải thích nghĩa cụ thể trong câu văn đang đọc.',
+    '- Ví dụ: 1 câu ví dụ đời thực ngắn gọn.',
   ].join('\n');
 
-  const prompt = options?.contextSnippet?.trim()
-    ? `Hãy giải thích nhanh từ/cụm từ: "${cleanTerm}"\nNgữ cảnh xuất hiện: "${options.contextSnippet.trim().slice(0, 260)}"`
-    : `Hãy giải thích nhanh từ/cụm từ: "${cleanTerm}"`;
+  const promptParts = [`Hãy giải thích từ/cụm từ: "${cleanTerm}"`];
+  if (options?.articleTitle?.trim()) {
+    promptParts.push(`Bài đang đọc: "${options.articleTitle.trim()}"`);
+  }
+  if (options?.contextSnippet?.trim()) {
+    promptParts.push(`Ngữ cảnh xuất hiện: "${options.contextSnippet.trim().slice(0, 320)}"`);
+  }
+  const prompt = promptParts.join('\n');
 
   try {
-    const res = await generateWithAI({
+    const res = await askV2WithSearch({
       prompt,
       systemInstruction,
-      generationConfig: {
-        temperature: 0.3,
-        maxOutputTokens: 320,
-        responseMimeType: 'text/plain',
-      },
     });
 
-    const cleanedText = res.text
+    const cleanedText = res.answer
       .replace(/<think>[\s\S]*?<\/think>/gi, '')
       .replace(/\*\*/g, '')
       .trim();
@@ -251,27 +311,95 @@ export async function explainTermQuickly(
       .map((l) => l.trim())
       .filter(Boolean);
 
-    let definition = cleanedText;
-    let example: string | undefined;
+    const defChunks: string[] = [];
+    const ctxChunks: string[] = [];
+    const exChunks: string[] = [];
+    let activeSection: 'def' | 'ctx' | 'ex' | null = null;
 
     for (const line of lines) {
       if (/^[-•*]?\s*nghĩa\s*:/i.test(line)) {
-        definition = line.replace(/^[-•*]?\s*nghĩa\s*:\s*/i, '').trim();
+        activeSection = 'def';
+        const val = line.replace(/^[-•*]?\s*nghĩa\s*:\s*/i, '').trim();
+        if (val) defChunks.push(val);
+      } else if (/^[-•*]?\s*trong\s+ngữ\s+cảnh\s*:/i.test(line)) {
+        activeSection = 'ctx';
+        const val = line.replace(/^[-•*]?\s*trong\s+ngữ\s+cảnh\s*:\s*/i, '').trim();
+        if (val) ctxChunks.push(val);
       } else if (/^[-•*]?\s*ví\s*dụ\s*:/i.test(line)) {
-        example = line.replace(/^[-•*]?\s*ví\s*dụ\s*:\s*/i, '').trim();
+        activeSection = 'ex';
+        const val = line.replace(/^[-•*]?\s*ví\s*dụ\s*:\s*/i, '').trim();
+        if (val) exChunks.push(val);
+      } else if (activeSection === 'ctx') {
+        ctxChunks.push(line);
+      } else if (activeSection === 'ex') {
+        exChunks.push(line);
+      } else {
+        defChunks.push(line);
       }
     }
+
+    const definition = defChunks.join(' ').trim() || cleanedText;
+    const contextMeaning = ctxChunks.join(' ').trim() || undefined;
+    const example = exChunks.join(' ').trim() || undefined;
 
     return {
       entry: {
         term: cleanTerm,
-        category: 'Giải thích nhanh (AI)',
+        category:
+          res.sources.length > 0 ? 'AI Library · Google/Web Search' : 'AI Library · Tra cứu học thuật',
         definition,
+        contextMeaning,
         example,
         source: 'ai-api',
+        sources: res.sources.length > 0 ? res.sources : undefined,
       },
     };
   } catch (err) {
+    if (!(err instanceof AIRateLimitError)) {
+      try {
+        const rescueRes = await fetch('/api/library/explain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            term: cleanTerm,
+            contextSnippet: options?.contextSnippet?.trim() || '',
+            articleTitle: options?.articleTitle?.trim() || '',
+          }),
+        });
+        if (rescueRes.ok) {
+          const rescueData = (await rescueRes.json()) as {
+            definition?: string;
+            contextNote?: string;
+            example?: string;
+            source?: string;
+            quotaExhausted?: boolean;
+            sources?: GroundingSource[];
+          };
+          if (rescueData.source === 'ai' && rescueData.definition?.trim()) {
+            return {
+              entry: {
+                term: cleanTerm,
+                category:
+                  Array.isArray(rescueData.sources) && rescueData.sources.length > 0
+                    ? 'AI Library · Web Search'
+                    : 'AI Library · Tra cứu học thuật',
+                definition: rescueData.definition.trim(),
+                contextMeaning: rescueData.contextNote?.trim() || undefined,
+                example: rescueData.example?.trim() || undefined,
+                source: 'ai-api',
+                sources:
+                  Array.isArray(rescueData.sources) && rescueData.sources.length > 0
+                    ? rescueData.sources
+                    : undefined,
+              },
+            };
+          }
+        }
+      } catch {
+        // Proceed to clean local fallback below
+      }
+    }
+
     if (localHit) {
       return {
         entry: localHit,
@@ -283,29 +411,27 @@ export async function explainTermQuickly(
       };
     }
 
-    if (err instanceof AIRateLimitError) {
-      return {
-        entry: null,
-        quotaExhausted: true,
-        errorMessage:
-          'Đã hết lượt bản thông minh (API AI) hiện tại nên chưa thể tra từ trực tuyến. Bạn có thể thử lại sau ít giây hoặc tra các thuật ngữ có sẵn trong từ điển nội bộ.',
-      };
-    }
-
-    if (err instanceof AIServiceError) {
-      return {
-        entry: null,
-        quotaExhausted: err.code === 'MISSING_API_KEY' || err.code === 'INVALID_API_KEY',
-        errorMessage:
-          err.code === 'MISSING_API_KEY' || err.code === 'INVALID_API_KEY'
-            ? 'Bản thông minh (API AI) hiện chưa được cấu hình khóa trên máy chủ. Bạn vẫn có thể tra các thuật ngữ học thuật có sẵn như: Biện chứng, Ngụy biện, Giả định ngầm, Phản ví dụ, Ẩn dụ...'
-            : err.message,
-      };
-    }
-
+    const snippet = options?.contextSnippet?.trim();
     return {
-      entry: null,
-      errorMessage: 'Không thể kết nối máy chủ giải thích từ lúc này. Vui lòng thử lại sau.',
+      entry: {
+        term: cleanTerm,
+        category: 'Gợi ý đọc theo ngữ cảnh',
+        definition: snippet
+          ? `"${cleanTerm}" là cụm từ/khái niệm xuất hiện trực tiếp trong đoạn văn đang đọc. Hãy đối chiếu với vế trước và vế sau để xác định vai trò lập luận của nó.`
+          : `"${cleanTerm}" là khái niệm cần được đặt trong ngữ cảnh cụ thể để xác định phạm vi nghĩa chính xác.`,
+        example: snippet
+          ? `Ngữ cảnh tham chiếu: “${snippet.slice(0, 140)}${snippet.length > 140 ? '…' : ''}”`
+          : 'Bạn có thể mở Concept Lab để nhờ AI bóc tách định nghĩa và ví dụ đối chiếu.',
+        source: 'local-glossary',
+      },
+      quotaExhausted:
+        err instanceof AIRateLimitError ||
+        (err instanceof AIServiceError &&
+          (err.code === 'MISSING_API_KEY' || err.code === 'INVALID_API_KEY')),
+      errorMessage:
+        err instanceof AIRateLimitError
+          ? 'API AI tạm chạm ngưỡng tần suất — đang hiển thị gợi ý phân tích theo ngữ cảnh.'
+          : undefined,
     };
   }
 }

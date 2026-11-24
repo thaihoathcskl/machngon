@@ -4,6 +4,7 @@ import { LIBRARY_CONCEPTS } from '../../content/library/concepts';
 import { Link, useRouter } from '../../lib/router';
 import { setLabHandoff } from '../../lib/storage';
 import { LibraryConcept, LibraryDocument } from '../../lib/types';
+import { dispatchQuickExplain } from '../dictionary/QuickDictionarySuite';
 
 interface ConceptModalProps {
   concept: LibraryConcept | null;
@@ -164,21 +165,35 @@ export function ConceptPopoverDialog({
           </div>
         )}
 
-        <div className="mt-5 flex flex-wrap items-center justify-end gap-2.5 pt-4 border-t border-[var(--color-border)]">
+        <div className="mt-5 flex flex-wrap items-center justify-end gap-2 pt-4 border-t border-[var(--color-border)]">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-[var(--color-border)] px-4 py-2 text-xs font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text)] cursor-pointer"
+            className="rounded-xl border border-[var(--color-border)] px-3.5 py-2 text-xs font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text)] cursor-pointer"
           >
             Đóng
           </button>
           <button
             type="button"
+            onClick={() => {
+              const ctx = activeDocument
+                ? `${concept.term} — ${concept.shortDefinition}`
+                : concept.shortDefinition;
+              onClose();
+              dispatchQuickExplain(concept.term, ctx, activeDocument?.title, true);
+            }}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--color-primary)]/45 bg-[color-mix(in_srgb,var(--color-primary)_8%,var(--color-surface)_92%)] px-3.5 py-2 text-xs font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-[var(--color-on-primary)] transition-colors cursor-pointer"
+          >
+            <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+            Giải thích sâu hơn theo ngữ cảnh bằng AI
+          </button>
+          <button
+            type="button"
             onClick={handleDeepDiveInLab}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--color-primary)] px-4 py-2 text-xs font-semibold text-[var(--color-on-primary)] hover:bg-[var(--color-primary-hover)] transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--color-primary)] px-3.5 py-2 text-xs font-semibold text-[var(--color-on-primary)] hover:bg-[var(--color-primary-hover)] transition-colors cursor-pointer"
           >
             <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-            Phân tích sâu hơn trong Concept Lab
+            Mở trong Concept Lab
           </button>
         </div>
       </div>
@@ -218,18 +233,39 @@ export function renderTextWithConceptHighlights(
   const matchedSpans: Array<{ start: number; end: number; concept: LibraryConcept }> = [];
   const usedConceptIds = new Set<string>();
 
+  const WORD_CHAR_RE = /[\p{L}\p{N}]/u;
+  const isBoundedMatch = (source: string, start: number, end: number): boolean => {
+    const prev = start > 0 ? source[start - 1] : '';
+    const next = end < source.length ? source[end] : '';
+    return (!prev || !WORD_CHAR_RE.test(prev)) && (!next || !WORD_CHAR_RE.test(next));
+  };
+
   for (const { alias, concept } of aliases) {
     if (usedConceptIds.has(concept.id)) continue;
-    const idx = lowerText.indexOf(alias.toLowerCase());
-    if (idx < 0) continue;
-    const end = idx + alias.length;
+    const lowerAlias = alias.toLowerCase();
+    let searchFrom = 0;
+    let matchedIdx = -1;
+    let matchedEnd = -1;
 
-    // Ensure no overlap with earlier span
-    const overlaps = matchedSpans.some((s) => !(end <= s.start || idx >= s.end));
-    if (overlaps) continue;
+    while (searchFrom < lowerText.length) {
+      const idx = lowerText.indexOf(lowerAlias, searchFrom);
+      if (idx < 0) break;
+      const end = idx + alias.length;
+      if (isBoundedMatch(text, idx, end)) {
+        const overlaps = matchedSpans.some((s) => !(end <= s.start || idx >= s.end));
+        if (!overlaps) {
+          matchedIdx = idx;
+          matchedEnd = end;
+          break;
+        }
+      }
+      searchFrom = idx + 1;
+    }
 
-    matchedSpans.push({ start: idx, end, concept });
-    usedConceptIds.add(concept.id);
+    if (matchedIdx >= 0) {
+      matchedSpans.push({ start: matchedIdx, end: matchedEnd, concept });
+      usedConceptIds.add(concept.id);
+    }
   }
 
   if (matchedSpans.length === 0) return text;

@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   ArrowRight,
+  Award,
   BookOpen,
   BrainCircuit,
   CheckCircle2,
@@ -8,21 +9,37 @@ import {
   Compass,
   MessageSquareText,
   NotebookPen,
+  Route,
   Sparkles,
+  TrendingDown,
+  TrendingUp,
 } from 'lucide-react';
 import { WorkspaceShell } from '../components/layout/AppShell';
 import { DailyQuoteCard } from '../components/quote/DailyQuoteCard';
 import { useTheme } from '../components/theme/ThemeProvider';
 import { EmptyStateCard, PageHeader } from '../components/ui/EditorialPrimitives';
 import { HybridMediaCard } from '../components/visuals/ThemeSyncedHero';
+import { getLabTypeDisplayLabel } from '../lib/ai/sessionReport';
+import { computeSkillMapStats } from '../lib/ai/v2Pedagogy';
 import { useApp } from '../lib/AppContext';
 import { EDITORIAL_IMAGES } from '../lib/assets';
 import { getPersonalizedRecommendations } from '../lib/library/recommendations';
+import { estimateReadingMinutes } from '../lib/library/validation';
 import { Link } from '../lib/router';
 import { getAllReadingProgress } from '../lib/storage';
 
 export function DashboardPage() {
-  const { user, publishedDocuments, savedDocIds, sessions, notes } = useApp();
+  const {
+    user,
+    publishedDocuments,
+    publishedCollections,
+    savedDocIds,
+    completedDocIds,
+    activeJourneyId,
+    rubricScores,
+    sessions,
+    notes,
+  } = useApp();
   const { isDark } = useTheme();
 
   const savedDocs = publishedDocuments.filter((d) => savedDocIds.includes(d.id));
@@ -32,6 +49,23 @@ export function DashboardPage() {
     (p) => p.scrollPercent >= 5
   ).length;
   const totalLedgerTurns = sessions.reduce((acc, s) => acc + s.ledger.length, 0);
+
+  const completedCount = completedDocIds.length;
+  const skillMap = computeSkillMapStats(rubricScores);
+  const activeJourney =
+    publishedCollections.find((col) => col.id === activeJourneyId) ??
+    publishedCollections[0] ??
+    null;
+  const journeyDoneCount = activeJourney
+    ? activeJourney.documentIds.filter((id) => completedDocIds.includes(id)).length
+    : 0;
+  const journeyNextDocId = activeJourney
+    ? activeJourney.documentIds.find((id) => !completedDocIds.includes(id)) ??
+      activeJourney.documentIds[0]
+    : null;
+  const journeyNextDoc = journeyNextDocId
+    ? publishedDocuments.find((d) => d.id === journeyNextDocId) ?? null
+    : null;
 
   // Unified personalized recommendations (max 3 published documents)
   const displayRecommendedDocs = getPersonalizedRecommendations(
@@ -47,7 +81,7 @@ export function DashboardPage() {
       id: `sess-${session.id}`,
       to: `/lab?session=${encodeURIComponent(session.id)}`,
       title: session.title,
-      space: session.labType === 'concept' ? 'Concept Lab' : 'Debate Lab',
+      space: getLabTypeDisplayLabel(session.labType),
       meta: `${session.ledger.length} mốc lập luận`,
       coverImage: EDITORIAL_IMAGES.coverEthicsDebate,
       coverAlt: session.title,
@@ -59,7 +93,7 @@ export function DashboardPage() {
         to: `/library/${doc.id}`,
         title: doc.title,
         space: 'Library',
-        meta: `${doc.category} · ${doc.readingMinutes} phút đọc`,
+        meta: `${doc.category} · ${estimateReadingMinutes(doc.blocks, doc.excerpt)} phút đọc`,
         coverImage: doc.coverImage,
         coverAlt: doc.coverAlt,
         kind: 'library' as const,
@@ -71,7 +105,7 @@ export function DashboardPage() {
     {
       title: 'Khảo sát sở thích học tập',
       label: 'Thiết lập sở thích đọc và phong cách đối thoại (5 bước ngắn)',
-      done: user.onboardingCompleted,
+      done: user.onboardingCompleted || user.interests.length > 0,
       to: '/onboarding',
       icon: Compass,
     },
@@ -138,7 +172,18 @@ export function DashboardPage() {
           aria-label="Tiến độ học tập cá nhân và chủ đề yêu thích"
           className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch"
         >
-          <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div className="rounded-xl p-4 surface-card">
+              <div className="text-[11px] font-medium text-[var(--color-text-muted)]">
+                Đã đọc xong
+              </div>
+              <div className="mt-1.5 font-display text-2xl font-bold font-mono-num text-[var(--color-primary)]">
+                {completedCount}
+                <span className="ml-1 text-xs font-normal text-[var(--color-text-muted)]">
+                  /{publishedDocuments.length}
+                </span>
+              </div>
+            </div>
             <div className="rounded-xl p-4 surface-card">
               <div className="text-[11px] font-medium text-[var(--color-text-muted)]">
                 Tài liệu đã lưu
@@ -149,7 +194,7 @@ export function DashboardPage() {
             </div>
             <div className="rounded-xl p-4 surface-card">
               <div className="text-[11px] font-medium text-[var(--color-text-muted)]">
-                Phiên Thinking Lab
+                Phiên Lab
               </div>
               <div className="mt-1.5 font-display text-2xl font-bold font-mono-num text-[var(--color-primary)]">
                 {sessions.length}
@@ -165,13 +210,18 @@ export function DashboardPage() {
             </div>
             <div className="rounded-xl p-4 surface-card">
               <div className="text-[11px] font-medium text-[var(--color-text-muted)]">
-                Ghi chú · Đang đọc
+                Ghi chú
               </div>
               <div className="mt-1.5 font-display text-2xl font-bold font-mono-num text-[var(--color-primary)]">
                 {notes.length}
-                <span className="text-xs font-normal text-[var(--color-text-muted)]">
-                  {' '}/ {startedDocsCount}
-                </span>
+              </div>
+            </div>
+            <div className="rounded-xl p-4 surface-card">
+              <div className="text-[11px] font-medium text-[var(--color-text-muted)]">
+                Đang đọc dở
+              </div>
+              <div className="mt-1.5 font-display text-2xl font-bold font-mono-num text-[var(--color-primary)]">
+                {startedDocsCount}
               </div>
             </div>
           </div>
@@ -199,6 +249,171 @@ export function DashboardPage() {
                 </Link>
               ))}
             </div>
+          </div>
+        </section>
+
+        {/* Active Journey Continuation & 5-Criteria Skill Map */}
+        <section
+          aria-label="Hành trình học tập và bản đồ kỹ năng"
+          className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch"
+        >
+          {/* Active Journey Card */}
+          <div className="lg:col-span-5 rounded-2xl p-6 surface-card flex flex-col justify-between gap-4">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--color-primary)]">
+                  <Route className="h-4 w-4" aria-hidden="true" />
+                  <span>Hành trình đang theo</span>
+                </span>
+                <Link
+                  to="/library"
+                  className="text-xs font-medium text-[var(--color-primary)] hover:underline whitespace-nowrap"
+                >
+                  Đổi hành trình
+                </Link>
+              </div>
+              {activeJourney ? (
+                <>
+                  <h2 className="font-display text-xl font-semibold text-[var(--color-text)]">
+                    {activeJourney.title}
+                  </h2>
+                  <p className="text-xs leading-relaxed text-[var(--color-text-muted)] line-clamp-2">
+                    {activeJourney.description}
+                  </p>
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[var(--color-text-muted)]">Tiến độ hoàn thành</span>
+                      <span className="font-mono-num font-semibold text-[var(--color-primary)]">
+                        {journeyDoneCount}/{activeJourney.documentIds.length} bài
+                      </span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--color-bg)] border border-[var(--color-border)]">
+                      <div
+                        className="h-full rounded-full bg-[var(--color-primary)] transition-[width] duration-300"
+                        style={{
+                          width: `${
+                            activeJourney.documentIds.length > 0
+                              ? Math.round((journeyDoneCount / activeJourney.documentIds.length) * 100)
+                              : 0
+                          }%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-[var(--color-text-muted)]">
+                  Chọn một hành trình trong AI Library để theo lộ trình đọc có hệ thống.
+                </p>
+              )}
+            </div>
+
+            {journeyNextDoc && (
+              <div className="pt-3 border-t border-[var(--color-border)] flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="block text-[11px] text-[var(--color-text-muted)]">
+                    Bài tiếp theo
+                  </span>
+                  <span className="block text-xs font-semibold text-[var(--color-text)] truncate">
+                    {journeyNextDoc.title}
+                  </span>
+                </div>
+                <Link
+                  to={`/library/${journeyNextDoc.id}`}
+                  className="btn-primary !min-h-9 !px-3.5 !text-xs shrink-0 whitespace-nowrap"
+                >
+                  Đọc tiếp
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              </div>
+            )}
+          </div>
+
+          {/* 5-Criteria Skill Map */}
+          <div className="lg:col-span-7 rounded-2xl p-6 surface-card flex flex-col justify-between gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[var(--color-border)]">
+              <div>
+                <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--color-primary)]">
+                  <Award className="h-4 w-4" aria-hidden="true" />
+                  <span>Bản đồ kỹ năng (5 tiêu chí · thang 1–3)</span>
+                </div>
+                <h2 className="mt-1 font-display text-xl font-semibold text-[var(--color-text)]">
+                  Hồ sơ năng lực lập luận
+                </h2>
+              </div>
+              <Link
+                to="/lab?mode=grade"
+                className="btn-secondary !min-h-9 !px-3.5 !text-xs whitespace-nowrap"
+              >
+                Chấm bài theo tiêu chí
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+            </div>
+
+            {skillMap.totalRuns === 0 ? (
+              <div className="py-4 text-sm text-[var(--color-text-muted)] leading-relaxed">
+                Chưa có lượt chấm theo 5 tiêu chí nào. Hãy viết lập trường ở cuối bài đọc hoặc mở chế độ{' '}
+                <Link to="/lab?mode=grade" className="text-[var(--color-primary)] font-semibold hover:underline">
+                  Chấm theo tiêu chí
+                </Link>{' '}
+                trong AI Labs để theo dõi điểm trung bình và xu hướng tiến bộ theo thời gian.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {skillMap.criteria.map((item) => {
+                  const pct = Math.min(100, Math.max(0, Math.round((item.average / 3) * 100)));
+                  return (
+                    <div key={item.key} className="space-y-1">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <span className="font-medium text-[var(--color-text)]">{item.label}</span>
+                        <div className="flex items-center gap-2 font-mono-num shrink-0">
+                          {item.delta !== null && (
+                            <span
+                              className={`inline-flex items-center gap-0.5 text-[11px] font-medium ${
+                                item.delta > 0
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : item.delta < 0
+                                    ? 'text-[var(--color-gold)]'
+                                    : 'text-[var(--color-text-muted)]'
+                              }`}
+                            >
+                              {item.delta > 0 ? (
+                                <>
+                                  <TrendingUp className="h-3 w-3" />+{item.delta.toFixed(1)}
+                                </>
+                              ) : item.delta < 0 ? (
+                                <>
+                                  <TrendingDown className="h-3 w-3" />
+                                  {item.delta.toFixed(1)}
+                                </>
+                              ) : (
+                                '='
+                              )}
+                            </span>
+                          )}
+                          <span className="font-semibold text-[var(--color-primary)]">
+                            {item.average.toFixed(1)} / 3.0
+                          </span>
+                        </div>
+                      </div>
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--color-bg)] border border-[var(--color-border)]">
+                        <div
+                          className="h-full rounded-full bg-[var(--color-primary)] transition-[width] duration-300"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+                {skillMap.priorityCriterion && (
+                  <p className="pt-2 border-t border-[var(--color-border)] text-xs text-[var(--color-text-muted)]">
+                    Dựa trên <span className="font-mono-num font-semibold text-[var(--color-text)]">{skillMap.totalRuns}</span> lượt chấm gần đây, kỹ năng nên ưu tiên rèn thêm:{' '}
+                    <strong className="text-[var(--color-primary)]">{skillMap.priorityCriterion.label}</strong>{' '}
+                    ({skillMap.priorityCriterion.average.toFixed(1)}/3.0).
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         </section>
 
@@ -406,7 +621,9 @@ export function DashboardPage() {
                         <div className="text-xs text-[var(--color-text-muted)]">
                           <span className="font-medium text-[var(--color-primary)]">{doc.category}</span>
                           <span aria-hidden="true"> · </span>
-                          <span className="font-mono-num">{doc.readingMinutes} phút đọc</span>
+                          <span className="font-mono-num">
+                            {estimateReadingMinutes(doc.blocks, doc.excerpt)} phút đọc
+                          </span>
                         </div>
                         <h3 className="mt-0.5 font-display text-base font-semibold truncate text-[var(--color-text)] group-hover:text-[var(--color-primary)] transition-colors">
                           {doc.title}
@@ -510,7 +727,9 @@ export function DashboardPage() {
                       <span className="font-semibold text-[var(--color-primary)] truncate">
                         {doc.category}
                       </span>
-                      <span className="font-mono-num shrink-0">{doc.readingMinutes} phút</span>
+                      <span className="font-mono-num shrink-0">
+                        {estimateReadingMinutes(doc.blocks, doc.excerpt)} phút
+                      </span>
                     </div>
                     <h3 className="mt-1.5 font-display text-base font-semibold leading-snug text-[var(--color-text)] group-hover:text-[var(--color-primary)] transition-colors line-clamp-2">
                       {doc.title}

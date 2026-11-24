@@ -161,8 +161,24 @@ export function getEvidenceStatusLabel(status: EvidenceVerificationStatus): stri
   }
 }
 
+export function getLabTypeDisplayLabel(labType: LabSession['labType']): string {
+  switch (labType) {
+    case 'concept':
+      return 'Concept Lab';
+    case 'read':
+      return 'Đọc văn bản văn học';
+    case 'annotate':
+      return 'Soi lập luận (Toulmin)';
+    case 'grade':
+      return 'Chấm theo tiêu chí';
+    case 'debate':
+    default:
+      return 'Debate Lab';
+  }
+}
+
 export function formatSessionReportMarkdown(report: SessionReportData): string {
-  const modeLabel = report.labType === 'concept' ? 'Concept Lab' : 'Debate Lab';
+  const modeLabel = getLabTypeDisplayLabel(report.labType);
   const lines: string[] = [
     `# BÁO CÁO PHIÊN ${modeLabel.toUpperCase()} — MẠCH NGÔN`,
     '',

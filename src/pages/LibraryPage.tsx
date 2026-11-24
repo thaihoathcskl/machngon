@@ -5,9 +5,11 @@ import {
   ChevronUp,
   Clock,
   Filter,
+  LayoutGrid,
+  Layers,
   X,
 } from 'lucide-react';
-import { WorkspaceShell } from '../components/layout/AppShell';
+import { PublicHeader, WorkspaceShell } from '../components/layout/AppShell';
 import { CategoryGrid } from '../components/library/CategoryGrid';
 import { CollectionCard } from '../components/library/CollectionCard';
 import { ConceptPopoverDialog } from '../components/library/ConceptTooltip';
@@ -24,13 +26,50 @@ import { EDITORIAL_TOPIC_ROADMAP } from '../content/library/categories';
 import { LIBRARY_CONCEPTS } from '../content/library/concepts';
 import { useApp } from '../lib/AppContext';
 import { searchDocuments } from '../lib/library/search';
-import { normalizeCategoryName } from '../lib/library/validation';
+import {
+  estimateReadingMinutes,
+  getDifficultyTone,
+  isDocumentVerified,
+  normalizeCategoryName,
+} from '../lib/library/validation';
+import { loadReadingScrollPosition } from '../lib/storage';
 import { Link, useRouter } from '../lib/router';
 import { DocumentCategory, DocumentDifficulty, LibraryConcept } from '../lib/types';
 
 const PAGE_SIZE = 9;
 
-type SortMode = 'default' | 'shortest' | 'newest';
+type SortMode = 'default' | 'az' | 'shortest' | 'level' | 'newest';
+type ProgressFilter = 'all' | 'new' | 'reading' | 'done' | 'saved';
+
+const DIFFICULTY_TIERS: Array<{
+  key: DocumentDifficulty;
+  step: string;
+  label: string;
+  subtitle: string;
+  description: string;
+}> = [
+  {
+    key: 'intro',
+    step: 'Bậc 1',
+    label: 'Nhập môn',
+    subtitle: 'Nền tảng khái niệm',
+    description: 'Diễn giải trực quan, ít thuật ngữ nặng, phù hợp bắt đầu làm quen chủ đề mới.',
+  },
+  {
+    key: 'explore',
+    step: 'Bậc 2',
+    label: 'Khám phá',
+    subtitle: 'Liên hệ & phân tích',
+    description: 'Mở rộng bối cảnh lịch sử – xã hội, so sánh nhiều góc nhìn và phản ví dụ.',
+  },
+  {
+    key: 'advanced',
+    step: 'Bậc 3',
+    label: 'Chuyên sâu',
+    subtitle: 'Phản biện học thuật',
+    description: 'Bóc tách giả định triết học – logic chặt chẽ, trích dẫn chuyên khảo gốc.',
+  },
+];
 
 function parseDateValue(dateStr: string): number {
   const parts = dateStr.split('/');
@@ -42,7 +81,15 @@ function parseDateValue(dateStr: string): number {
 }
 
 export function LibraryPage() {
-  const { publishedDocuments, visibleCategories, publishedCollections } = useApp();
+  const {
+    user,
+    publishedDocuments,
+    visibleCategories,
+    publishedCollections,
+    savedDocIds,
+    completedDocIds,
+    openedDocIds,
+  } = useApp();
   const { showToast } = useToast();
   const { search: urlSearch } = useRouter();
 
@@ -54,10 +101,13 @@ export function LibraryPage() {
     const cat = initialParams.get('category');
     return cat ? normalizeCategoryName(cat) : 'Tất cả';
   });
+  const [activeSubGenre, setActiveSubGenre] = useState<string>('all');
+  const [progressFilter, setProgressFilter] = useState<ProgressFilter>('all');
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(
     () => initialParams.get('collection')
   );
   const [difficultyFilter, setDifficultyFilter] = useState<'all' | DocumentDifficulty>('all');
+  const [groupByDifficulty, setGroupByDifficulty] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>('default');
   const [page, setPage] = useState(1);
 
@@ -69,6 +119,22 @@ export function LibraryPage() {
 
   const catalogRef = useRef<HTMLElement | null>(null);
   const collectionsRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const cat = initialParams.get('category');
+    if (cat) {
+      setActiveCategory(normalizeCategoryName(cat));
+      setActiveSubGenre('all');
+    }
+    if (initialParams.get('focus') === '1') {
+      const el = document.getElementById('library-search-input') as HTMLInputElement | null;
+      if (el) {
+        window.setTimeout(() => {
+          el.focus();
+        }, 60);
+      }
+    }
+  }, [initialParams]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -91,6 +157,18 @@ export function LibraryPage() {
     [publishedCollections, activeCollectionId]
   );
 
+  const availableSubGenres = useMemo(() => {
+    const base =
+      activeCategory === 'Tất cả'
+        ? publishedDocuments
+        : publishedDocuments.filter((d) => normalizeCategoryName(d.category) === activeCategory);
+    const genres = new Set<string>();
+    for (const d of base) {
+      if (d.genre?.trim()) genres.add(d.genre.trim());
+    }
+    return Array.from(genres).sort((a, b) => a.localeCompare(b, 'vi'));
+  }, [publishedDocuments, activeCategory]);
+
   const filteredDocuments = useMemo(() => {
     let list = debouncedQuery.trim()
       ? searchDocuments(publishedDocuments, debouncedQuery, LIBRARY_CONCEPTS)
@@ -98,6 +176,10 @@ export function LibraryPage() {
 
     if (activeCategory !== 'Tất cả') {
       list = list.filter((doc) => normalizeCategoryName(doc.category) === activeCategory);
+    }
+
+    if (activeSubGenre !== 'all') {
+      list = list.filter((doc) => doc.genre?.trim() === activeSubGenre);
     }
 
     if (activeCollection) {
@@ -109,8 +191,35 @@ export function LibraryPage() {
       list = list.filter((doc) => (doc.difficulty ?? 'explore') === difficultyFilter);
     }
 
-    if (sortMode === 'shortest') {
-      list = [...list].sort((a, b) => a.readingMinutes - b.readingMinutes);
+    if (progressFilter !== 'all') {
+      const savedSet = new Set(savedDocIds);
+      const doneSet = new Set(completedDocIds);
+      const openedSet = new Set(openedDocIds);
+      list = list.filter((doc) => {
+        const scroll = loadReadingScrollPosition(doc.id);
+        const pct = scroll ? scroll.scrollPercent : 0;
+        const isDone = doneSet.has(doc.id) || pct >= 90;
+        const isReading = !isDone && (pct >= 5 || openedSet.has(doc.id));
+        if (progressFilter === 'saved') return savedSet.has(doc.id);
+        if (progressFilter === 'done') return isDone;
+        if (progressFilter === 'reading') return isReading;
+        return !isDone && !isReading;
+      });
+    }
+
+    const diffRank = (d?: DocumentDifficulty) =>
+      d === 'intro' ? 1 : d === 'advanced' ? 3 : 2;
+
+    if (sortMode === 'az') {
+      list = [...list].sort((a, b) => a.title.localeCompare(b.title, 'vi'));
+    } else if (sortMode === 'shortest') {
+      list = [...list].sort(
+        (a, b) =>
+          estimateReadingMinutes(a.blocks, a.excerpt) -
+          estimateReadingMinutes(b.blocks, b.excerpt)
+      );
+    } else if (sortMode === 'level') {
+      list = [...list].sort((a, b) => diffRank(a.difficulty) - diffRank(b.difficulty));
     } else if (sortMode === 'newest') {
       list = [...list].sort(
         (a, b) => parseDateValue(b.publishedDate) - parseDateValue(a.publishedDate)
@@ -122,8 +231,13 @@ export function LibraryPage() {
     publishedDocuments,
     debouncedQuery,
     activeCategory,
+    activeSubGenre,
     activeCollection,
     difficultyFilter,
+    progressFilter,
+    savedDocIds,
+    completedDocIds,
+    openedDocIds,
     sortMode,
   ]);
 
@@ -139,19 +253,34 @@ export function LibraryPage() {
     setRawQuery('');
     setDebouncedQuery('');
     setActiveCategory('Tất cả');
+    setActiveSubGenre('all');
+    setProgressFilter('all');
     setActiveCollectionId(null);
     setDifficultyFilter('all');
     setSortMode('default');
     setPage(1);
   };
 
+  const difficultyCounts = useMemo(() => {
+    const counts: Record<DocumentDifficulty, number> = { intro: 0, explore: 0, advanced: 0 };
+    for (const d of publishedDocuments) {
+      counts[d.difficulty ?? 'explore'] += 1;
+    }
+    return counts;
+  }, [publishedDocuments]);
+
+  const verifiedDocsCount = useMemo(
+    () => publishedDocuments.filter((d) => isDocumentVerified(d)).length,
+    [publishedDocuments]
+  );
+
   const publishedRoadmapCount = EDITORIAL_TOPIC_ROADMAP.filter((t) =>
     Boolean(t.publishedDocId && publishedDocuments.some((d) => d.id === t.publishedDocId))
   ).length;
 
-  return (
-    <WorkspaceShell>
-      <div className="mx-auto max-w-[1220px] px-5 sm:px-8 lg:px-10 py-8 space-y-10">
+  const pageBody = (
+    <>
+      <div className="mx-auto max-w-[1220px] px-4 sm:px-8 lg:px-10 py-6 sm:py-8 space-y-8 sm:space-y-10">
         {/* Top Reading Comfort Bar: Synced Font Size Control (persisted in localStorage) */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-[var(--color-text-muted)]">
@@ -160,17 +289,7 @@ export function LibraryPage() {
           <LibraryFontSizeControl />
         </div>
 
-        {/* 1. Library Hero */}
-        <LibraryHero
-          totalDocs={publishedDocuments.length}
-          totalCategories={visibleCategories.length}
-          totalCollections={publishedCollections.length}
-          totalConcepts={LIBRARY_CONCEPTS.length}
-          onJumpToCatalog={scrollToCatalog}
-          onJumpToCollections={scrollToCollections}
-        />
-
-        {/* 2. Central Academic Search & Autocomplete */}
+        {/* 1. Central Academic Search & Autocomplete (Prominent position) */}
         <LibrarySearch
           query={rawQuery}
           onQueryChange={setRawQuery}
@@ -178,6 +297,33 @@ export function LibraryPage() {
           onSelectConcept={(concept) => setSelectedConcept(concept)}
           onSubmitSearch={scrollToCatalog}
         />
+
+        {/* 2. Library Hero + Quick Glossary Bar */}
+        <LibraryHero
+          totalDocs={publishedDocuments.length}
+          verifiedDocsCount={verifiedDocsCount}
+          totalCategories={visibleCategories.length}
+          totalCollections={publishedCollections.length}
+          totalConcepts={LIBRARY_CONCEPTS.length}
+          onJumpToCatalog={scrollToCatalog}
+          onJumpToCollections={scrollToCollections}
+        />
+
+        {!isSearching && (
+          <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4 sm:px-6 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="font-display text-base font-semibold text-[var(--color-text)]">
+                Sổ từ vựng tư duy ({LIBRARY_CONCEPTS.length} thuật ngữ & Thẻ ghi nhớ)
+              </div>
+              <p className="text-xs text-[var(--color-text-muted)]">
+                Tra thuật ngữ A–Z liên thông tới bài đọc và tự kiểm tra ghi nhớ bằng Flashcard.
+              </p>
+            </div>
+            <Link to="/glossary" className="btn-secondary !min-h-9 !px-4 !text-xs shrink-0">
+              Mở Sổ thuật ngữ →
+            </Link>
+          </div>
+        )}
 
         {/* 3. Continue Reading (real progress only; auto-hides when empty) */}
         {!isSearching && <ContinueReading publishedDocuments={publishedDocuments} />}
@@ -254,6 +400,88 @@ export function LibraryPage() {
           </section>
         )}
 
+        {/* 6.5. 3-Tier Academic Difficulty Progression */}
+        {!isSearching && (
+          <section
+            aria-labelledby="difficulty-hierarchy-heading"
+            data-testid="library-difficulty-hierarchy"
+            className="space-y-4"
+          >
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-gold)]">
+                  Phân cấp học liệu 3 bậc
+                </p>
+                <h2
+                  id="difficulty-hierarchy-heading"
+                  className="mt-1 font-display lib-scale-h2 font-bold text-[var(--color-text)]"
+                >
+                  Đọc theo độ sâu tư duy
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDifficultyFilter('all');
+                  setGroupByDifficulty(true);
+                  scrollToCatalog();
+                }}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--color-primary)] hover:underline cursor-pointer"
+              >
+                <Layers className="h-3.5 w-3.5" />
+                Xem toàn bộ kho chia theo 3 bậc →
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {DIFFICULTY_TIERS.map((tier) => {
+                const tone = getDifficultyTone(tier.key);
+                const count = difficultyCounts[tier.key];
+                const isSelected = difficultyFilter === tier.key;
+                return (
+                  <button
+                    key={tier.key}
+                    type="button"
+                    onClick={() => {
+                      setDifficultyFilter(isSelected ? 'all' : tier.key);
+                      setGroupByDifficulty(false);
+                      setPage(1);
+                      scrollToCatalog();
+                    }}
+                    className={`text-left rounded-2xl p-4 sm:p-5 border transition-all cursor-pointer ${
+                      isSelected
+                        ? 'border-[var(--color-primary)] bg-[var(--color-surface)] shadow-sm'
+                        : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-primary)]/45'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-0.5 text-[11px] font-semibold"
+                        style={{
+                          backgroundColor: tone.bg,
+                          color: tone.text,
+                          borderColor: tone.border,
+                        }}
+                      >
+                        {tier.step} · {tier.label}
+                      </span>
+                      <span className="font-mono-num text-xs font-semibold text-[var(--color-text-muted)]">
+                        {count} bài
+                      </span>
+                    </div>
+                    <div className="mt-2.5 font-display text-base font-semibold text-[var(--color-text)]">
+                      {tier.subtitle}
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-[var(--color-text-muted)]">
+                      {tier.description}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
         {/* 7. Full Paginated Catalog with Filters & Sorting */}
         <section
           ref={catalogRef}
@@ -277,18 +505,87 @@ export function LibraryPage() {
               </h2>
             </div>
 
-            <div className="text-xs text-[var(--color-text-muted)] font-mono-num">
-              Hiển thị <strong className="text-[var(--color-text)]">{filteredDocuments.length}</strong> /{' '}
-              {publishedDocuments.length} tài liệu
+            <div className="flex flex-wrap items-center gap-3">
+              <div
+                role="group"
+                aria-label="Chế độ hiển thị danh mục"
+                className="inline-flex rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-0.5 text-xs"
+              >
+                <button
+                  type="button"
+                  onClick={() => setGroupByDifficulty(false)}
+                  aria-pressed={!groupByDifficulty}
+                  className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 font-medium transition-colors cursor-pointer ${
+                    !groupByDifficulty
+                      ? 'bg-[var(--color-primary)] text-[var(--color-on-primary)]'
+                      : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                  }`}
+                >
+                  <LayoutGrid className="h-3.5 w-3.5" />
+                  Lưới
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGroupByDifficulty(true);
+                    setDifficultyFilter('all');
+                  }}
+                  aria-pressed={groupByDifficulty}
+                  data-testid="group-by-difficulty-btn"
+                  className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 font-medium transition-colors cursor-pointer ${
+                    groupByDifficulty
+                      ? 'bg-[var(--color-primary)] text-[var(--color-on-primary)]'
+                      : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                  }`}
+                >
+                  <Layers className="h-3.5 w-3.5" />
+                  Theo 3 bậc
+                </button>
+              </div>
+              <div className="text-xs text-[var(--color-text-muted)] font-mono-num">
+                Hiển thị <strong className="text-[var(--color-text)]">{filteredDocuments.length}</strong> /{' '}
+                {publishedDocuments.length} tài liệu
+              </div>
             </div>
           </div>
 
           {/* Filter Strip: Categories + Difficulty + Sort */}
           <div className="space-y-3">
+            {/* Mobile (< 640px): Clean <select> so filter chips never clip or overflow at 390px */}
+            <div className="sm:hidden">
+              <label htmlFor="mobile-category-select" className="block text-xs font-medium text-[var(--color-text-muted)] mb-1.5">
+                Lọc theo lĩnh vực
+              </label>
+              <select
+                id="mobile-category-select"
+                value={activeCategory}
+                onChange={(e) => {
+                  const val = e.target.value as 'Tất cả' | DocumentCategory;
+                  setActiveCategory(val);
+                  setActiveCollectionId(null);
+                  setPage(1);
+                }}
+                className="w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-3.5 py-2.5 text-sm font-medium text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
+              >
+                <option value="Tất cả">Tất cả lĩnh vực ({publishedDocuments.length})</option>
+                {visibleCategories.map((cat) => {
+                  const count = publishedDocuments.filter(
+                    (d) => normalizeCategoryName(d.category) === cat.name
+                  ).length;
+                  return (
+                    <option key={cat.id} value={cat.name}>
+                      {cat.name} ({count})
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            {/* Desktop / Tablet (sm+): Tablist */}
             <div
               role="tablist"
               aria-label="Lọc tài liệu theo lĩnh vực"
-              className="flex items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible"
+              className="hidden sm:flex items-center gap-2 flex-wrap"
             >
               <button
                 type="button"
@@ -337,17 +634,17 @@ export function LibraryPage() {
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs">
                 <span className="inline-flex items-center gap-1 text-[var(--color-text-muted)] font-medium">
                   <Filter className="h-3.5 w-3.5" aria-hidden="true" />
                   Mức độ:
                 </span>
                 {(
                   [
-                    { key: 'all', label: 'Tất cả' },
-                    { key: 'intro', label: 'Cơ bản' },
-                    { key: 'explore', label: 'Trung cấp' },
-                    { key: 'advanced', label: 'Nâng cao' },
+                    { key: 'all', label: `Tất cả (${publishedDocuments.length})` },
+                    { key: 'intro', label: `Nhập môn (${difficultyCounts.intro})` },
+                    { key: 'explore', label: `Khám phá (${difficultyCounts.explore})` },
+                    { key: 'advanced', label: `Chuyên sâu (${difficultyCounts.advanced})` },
                   ] as const
                 ).map((item) => (
                   <button
@@ -355,6 +652,7 @@ export function LibraryPage() {
                     type="button"
                     onClick={() => {
                       setDifficultyFilter(item.key);
+                      if (item.key !== 'all') setGroupByDifficulty(false);
                       setPage(1);
                     }}
                     className={`rounded-lg px-2.5 py-1.5 font-medium transition-colors cursor-pointer ${
@@ -367,7 +665,12 @@ export function LibraryPage() {
                   </button>
                 ))}
 
-                {(activeCollection || activeCategory !== 'Tất cả' || difficultyFilter !== 'all' || isSearching) && (
+                {(activeCollection ||
+                  activeCategory !== 'Tất cả' ||
+                  activeSubGenre !== 'all' ||
+                  progressFilter !== 'all' ||
+                  difficultyFilter !== 'all' ||
+                  isSearching) && (
                   <button
                     type="button"
                     onClick={resetAllFilters}
@@ -379,29 +682,78 @@ export function LibraryPage() {
                 )}
               </div>
 
-              <div className="flex items-center gap-2 text-xs">
-                <label htmlFor="library-sort-select" className="text-[var(--color-text-muted)]">
-                  Sắp xếp:
-                </label>
-                <select
-                  id="library-sort-select"
-                  value={sortMode}
-                  onChange={(e) => {
-                    setSortMode(e.target.value as SortMode);
-                    setPage(1);
-                  }}
-                  className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
-                >
-                  <option value="default">Tuyển chọn mặc định</option>
-                  <option value="newest">Mới cập nhật</option>
-                  <option value="shortest">Thời lượng đọc ngắn nhất</option>
-                </select>
+              <div className="flex flex-wrap items-center gap-2.5 text-xs">
+                {availableSubGenres.length > 1 && (
+                  <div className="flex items-center gap-1.5">
+                    <label htmlFor="library-subgenre-select" className="text-[var(--color-text-muted)]">
+                      Nhóm:
+                    </label>
+                    <select
+                      id="library-subgenre-select"
+                      value={activeSubGenre}
+                      onChange={(e) => {
+                        setActiveSubGenre(e.target.value);
+                        setPage(1);
+                      }}
+                      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)] max-w-[180px]"
+                    >
+                      <option value="all">Tất cả thể loại / nhóm</option>
+                      {availableSubGenres.map((g) => (
+                        <option key={g} value={g}>
+                          {g}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-1.5">
+                  <label htmlFor="library-progress-select" className="text-[var(--color-text-muted)]">
+                    Trạng thái:
+                  </label>
+                  <select
+                    id="library-progress-select"
+                    value={progressFilter}
+                    onChange={(e) => {
+                      setProgressFilter(e.target.value as ProgressFilter);
+                      setPage(1);
+                    }}
+                    className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
+                  >
+                    <option value="all">Tất cả trạng thái</option>
+                    <option value="new">Chưa đọc</option>
+                    <option value="reading">Đang đọc dở</option>
+                    <option value="done">Đã xong</option>
+                    <option value="saved">Đã lưu</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <label htmlFor="library-sort-select" className="text-[var(--color-text-muted)]">
+                    Sắp xếp:
+                  </label>
+                  <select
+                    id="library-sort-select"
+                    value={sortMode}
+                    onChange={(e) => {
+                      setSortMode(e.target.value as SortMode);
+                      setPage(1);
+                    }}
+                    className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
+                  >
+                    <option value="default">Tuyển chọn mặc định</option>
+                    <option value="az">Tên A → Z</option>
+                    <option value="shortest">Ngắn trước</option>
+                    <option value="level">Dễ → Khó</option>
+                    <option value="newest">Mới cập nhật</option>
+                  </select>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Document Grid or Empty State */}
-          {pagedDocuments.length === 0 ? (
+          {/* Document Grid, Grouped 3-Tier View, or Empty State */}
+          {filteredDocuments.length === 0 ? (
             <EmptyStateCard
               title="Chưa tìm thấy tài liệu phù hợp"
               description="Thử nới rộng từ khóa, đổi mức độ đọc hoặc đặt lại bộ lọc để duyệt toàn bộ kho học liệu."
@@ -411,6 +763,45 @@ export function LibraryPage() {
                 </button>
               }
             />
+          ) : groupByDifficulty && difficultyFilter === 'all' ? (
+            <div className="space-y-8" data-testid="grouped-difficulty-catalog">
+              {DIFFICULTY_TIERS.map((tier) => {
+                const tierDocs = filteredDocuments.filter(
+                  (d) => (d.difficulty ?? 'explore') === tier.key
+                );
+                if (tierDocs.length === 0) return null;
+                const tone = getDifficultyTone(tier.key);
+                return (
+                  <div key={tier.key} className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--color-border)]">
+                      <div className="flex items-center gap-2.5">
+                        <span
+                          className="inline-flex items-center rounded-lg border px-2.5 py-0.5 text-xs font-semibold"
+                          style={{
+                            backgroundColor: tone.bg,
+                            color: tone.text,
+                            borderColor: tone.border,
+                          }}
+                        >
+                          {tier.step} · {tier.label}
+                        </span>
+                        <span className="text-xs text-[var(--color-text-muted)]">
+                          {tier.subtitle}
+                        </span>
+                      </div>
+                      <span className="font-mono-num text-xs font-medium text-[var(--color-text-muted)]">
+                        {tierDocs.length} bài đọc
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 items-stretch">
+                      {tierDocs.map((doc) => (
+                        <DocumentCard key={doc.id} doc={doc} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           ) : (
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 items-stretch">
@@ -445,7 +836,7 @@ export function LibraryPage() {
                 Lộ trình biên soạn minh bạch
               </p>
               <h3 className="mt-1 font-display lib-scale-h3 font-bold text-[var(--color-text)]">
-                Khung chương trình {EDITORIAL_TOPIC_ROADMAP.length} chủ đề học thuật ({publishedRoadmapCount} đã xuất bản & kiểm chứng)
+                Khung chương trình {EDITORIAL_TOPIC_ROADMAP.length} chủ đề học thuật ({publishedRoadmapCount} đã xuất bản · {verifiedDocsCount} đạt chuẩn ≥2 nguồn kiểm chứng)
               </h3>
               <p className="mt-1 lib-scale-small text-[var(--color-text-muted)]">
                 Mọi bài đọc mới đều trải qua quy trình biên soạn và đối chiếu nguồn tham khảo thực trước khi công bố.
@@ -535,6 +926,17 @@ export function LibraryPage() {
         onSelectConcept={(concept) => setSelectedConcept(concept)}
         allPublishedDocuments={publishedDocuments}
       />
-    </WorkspaceShell>
+    </>
+  );
+
+  if (user.isAuthenticated) {
+    return <WorkspaceShell>{pageBody}</WorkspaceShell>;
+  }
+
+  return (
+    <div className="min-h-dvh bg-[var(--color-bg)] text-[var(--color-text)] flex flex-col overflow-x-clip">
+      <PublicHeader />
+      <main className="flex-1">{pageBody}</main>
+    </div>
   );
 }

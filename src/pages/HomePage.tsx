@@ -18,9 +18,55 @@ import { useTheme } from '../components/theme/ThemeProvider';
 import { SectionHeading } from '../components/ui/EditorialPrimitives';
 import { ChapterDividerSvg } from '../components/visuals/EditorialSvgIllustrations';
 import { ThemeSyncedHero } from '../components/visuals/ThemeSyncedHero';
+import { LIBRARY_CONCEPTS } from '../content/library/concepts';
 import { useApp } from '../lib/AppContext';
 import { PRESET_LIST } from '../lib/palettes';
 import { Link } from '../lib/router';
+
+const SIX_DISCIPLINE_CARDS = [
+  {
+    code: 'vh',
+    title: 'Văn học & Lý luận',
+    category: 'Văn học và lý luận văn học',
+    desc: 'Thơ, truyện ngắn, kịch, kí và thi pháp tiếp nhận',
+    cover: '/assets/images/cover_vh.jpg',
+  },
+  {
+    code: 'nn',
+    title: 'Ngôn ngữ học',
+    category: 'Ngôn ngữ học',
+    desc: 'Sapir–Whorf, ẩn dụ ý niệm, hàm ngôn và kí hiệu',
+    cover: '/assets/images/cover_nn.jpg',
+  },
+  {
+    code: 'lt',
+    title: 'Logic & Lập luận',
+    category: 'Logic và lập luận',
+    desc: 'Mô hình Toulmin, nhân quả, ngụy biện và nghị luận',
+    cover: '/assets/images/cover_lt.jpg',
+  },
+  {
+    code: 'th',
+    title: 'Triết học & Tư tưởng',
+    category: 'Triết học và tư tưởng',
+    desc: 'Socrates, Aristotle, Khắc kỷ, Hiện sinh, Đông phương',
+    cover: '/assets/images/cover_th.jpg',
+  },
+  {
+    code: 'pb',
+    title: 'Tư duy phản biện',
+    category: 'Tư duy phản biện',
+    desc: 'Nguyên tắc Bác ái, tách sự kiện – diễn giải, thiên kiến',
+    cover: '/assets/images/cover_pb.jpg',
+  },
+  {
+    code: 'tt',
+    title: 'Liên ngành & Công dân số',
+    category: 'Kiến thức liên ngành',
+    desc: 'Đạo đức AI, nhận diện tin giả, sinh thái học và truyền thông',
+    cover: '/assets/images/cover_tt.jpg',
+  },
+];
 
 const HOW_IT_WORKS_STEPS = [
   {
@@ -72,9 +118,44 @@ const CORE_VALUES = [
 ];
 
 export function HomePage() {
-  const { user, publishedDocuments } = useApp();
+  const { user, publishedDocuments, visibleCategories, publishedCollections } = useApp();
   const { config, activePreset, isDark, selectPreset } = useTheme();
-  const featuredDocs = publishedDocuments.slice(0, 3);
+
+  // Diverse 6 featured docs picked cleanly across corpus
+  const featuredDocs = React.useMemo(() => {
+    const curatedIds = [
+      'to-hoai-vo-chong-a-phu',
+      'mo-hinh-lap-luan-toulmin',
+      'hsgqg-2025-nlvh-camus-nghe-si',
+      'ngon-ngu-va-tu-duy',
+      'triet-hoc-hien-sinh',
+      'ai-va-dao-duc',
+    ];
+    const picked = curatedIds
+      .map((id) => publishedDocuments.find((d) => d.id === id))
+      .filter((d): d is NonNullable<typeof d> => Boolean(d));
+    if (picked.length >= 6) return picked.slice(0, 6);
+    const seen = new Set(picked.map((d) => d.id));
+    for (const d of publishedDocuments) {
+      if (!seen.has(d.id)) {
+        picked.push(d);
+        seen.add(d.id);
+      }
+      if (picked.length >= 6) break;
+    }
+    return picked;
+  }, [publishedDocuments]);
+
+  // Deterministic daily reading suggestion
+  const todayDoc = React.useMemo(() => {
+    if (publishedDocuments.length === 0) return null;
+    const dayKey = new Date().toISOString().slice(0, 10);
+    let hash = 0;
+    for (let i = 0; i < dayKey.length; i += 1) {
+      hash = (hash * 31 + dayKey.charCodeAt(i)) >>> 0;
+    }
+    return publishedDocuments[hash % publishedDocuments.length];
+  }, [publishedDocuments]);
 
   return (
     <div className="min-h-dvh bg-[var(--color-bg)] text-[var(--color-text)] flex flex-col">
@@ -102,11 +183,7 @@ export function HomePage() {
 
                 <div className="mt-6 flex flex-wrap items-center gap-3">
                   <Link
-                    to={
-                      user.isAuthenticated
-                        ? '/dashboard'
-                        : '/auth?mode=register&redirect=%2Fonboarding'
-                    }
+                    to={user.isAuthenticated ? '/dashboard' : '/library'}
                     className="btn-primary px-6"
                   >
                     {user.isAuthenticated ? 'Tiếp tục học tập' : 'Bắt đầu ngay'}
@@ -177,7 +254,7 @@ export function HomePage() {
                   </div>
                   <div className="mt-6 pt-4 border-t border-[var(--color-border)]/80 flex items-center justify-between gap-2 text-xs">
                     <span className="text-[var(--color-text-muted)]">
-                      Concept · Debate Lab
+                      Tranh biện · Khái niệm · Đọc văn học · Toulmin · Chấm 5 tiêu chí
                     </span>
                     <span className="inline-flex items-center gap-1 font-semibold text-[var(--color-primary)]">
                       Mở AI Labs
@@ -188,8 +265,57 @@ export function HomePage() {
               </div>
             </div>
 
+            {/* Live Inventory + Daily Suggestion Strip */}
+            <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+              <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-3 rounded-xl p-4 border border-[var(--color-border)] bg-[var(--color-surface)]/92">
+                <div>
+                  <div className="font-display text-2xl font-bold font-mono-num text-[var(--color-primary)]">
+                    {publishedDocuments.length}
+                  </div>
+                  <div className="text-xs text-[var(--color-text-muted)]">Bài đọc chọn lọc</div>
+                </div>
+                <div>
+                  <div className="font-display text-2xl font-bold font-mono-num text-[var(--color-primary)]">
+                    {visibleCategories.length}
+                  </div>
+                  <div className="text-xs text-[var(--color-text-muted)]">Lĩnh vực trụ cột</div>
+                </div>
+                <div>
+                  <div className="font-display text-2xl font-bold font-mono-num text-[var(--color-primary)]">
+                    {publishedCollections.length}
+                  </div>
+                  <div className="text-xs text-[var(--color-text-muted)]">Hành trình tri thức</div>
+                </div>
+                <Link to="/glossary" className="group">
+                  <div className="font-display text-2xl font-bold font-mono-num text-[var(--color-primary)] group-hover:underline">
+                    {LIBRARY_CONCEPTS.length}
+                  </div>
+                  <div className="text-xs text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">
+                    Thuật ngữ · Thẻ ghi nhớ
+                  </div>
+                </Link>
+              </div>
+
+              {todayDoc && (
+                <Link
+                  to={`/library/${todayDoc.id}`}
+                  className="lg:col-span-5 rounded-xl p-4 border border-[var(--color-border)] bg-[var(--color-surface)]/92 hover:border-[var(--color-primary)]/50 transition-colors flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-gold)]">
+                      Gợi ý đọc hôm nay · {todayDoc.genre || todayDoc.category}
+                    </div>
+                    <div className="mt-0.5 font-display text-sm sm:text-base font-semibold text-[var(--color-text)] truncate">
+                      {todayDoc.title}
+                    </div>
+                  </div>
+                  <ArrowRight className="h-4 w-4 shrink-0 text-[var(--color-primary)]" />
+                </Link>
+              )}
+            </div>
+
             {/* Quiet Theme Atmosphere Switcher Strip inside Hero Footer */}
-            <div className="mt-8 rounded-xl px-4 py-3 border border-[var(--color-border)] bg-[var(--color-surface)]/92 backdrop-blur-[2px] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="mt-4 rounded-xl px-4 py-3 border border-[var(--color-border)] bg-[var(--color-surface)]/92 backdrop-blur-[2px] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-medium text-[var(--color-text-muted)] mr-1">
                   Không gian đọc:
@@ -305,10 +431,101 @@ export function HomePage() {
               }
             />
 
-            <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
+            <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
               {featuredDocs.map((doc) => (
                 <DocumentCard key={doc.id} doc={doc} />
               ))}
+            </div>
+          </section>
+
+          {/* Section 3.5: Six Disciplines Artwork Grid + Live AI Labs Dialogue Sample */}
+          <section aria-labelledby="six-disciplines-heading" className="mt-14 space-y-6">
+            <SectionHeading
+              id="six-disciplines-heading"
+              title="Sáu lĩnh vực nền tảng"
+              description="Mạch Ngôn kết nối văn chương, ngôn ngữ học, logic lập luận và triết học trong một hệ thống đọc – viết thống nhất."
+              action={
+                <Link
+                  to="/glossary"
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--color-primary)] hover:underline whitespace-nowrap"
+                >
+                  Sổ từ vựng ({LIBRARY_CONCEPTS.length} thuật ngữ)
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              }
+            />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {SIX_DISCIPLINE_CARDS.map((item) => (
+                <Link
+                  key={item.code}
+                  to={`/library?category=${encodeURIComponent(item.category)}`}
+                  className="group relative overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] flex items-center gap-4 p-4 transition-all hover:border-[var(--color-primary)]/50 hover:-translate-y-0.5"
+                >
+                  <div className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-[var(--color-border)]">
+                    <img
+                      src={item.cover}
+                      alt={item.title}
+                      loading="lazy"
+                      className="h-full w-full object-cover hybrid-media-img transition-transform duration-300 group-hover:scale-105"
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-display text-base font-semibold text-[var(--color-text)] group-hover:text-[var(--color-primary)] transition-colors">
+                      {item.title}
+                    </h3>
+                    <p className="mt-1 text-xs leading-relaxed text-[var(--color-text-muted)] line-clamp-2">
+                      {item.desc}
+                    </p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </section>
+
+          {/* Compact AI Labs 3-Step Socrates Dialogue Preview */}
+          <section className="mt-12 rounded-2xl p-6 sm:p-8 surface-card grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+            <div className="lg:col-span-5 space-y-3">
+              <p className="editorial-kicker">Cách AI Labs đối thoại cùng bạn</p>
+              <h2 className="font-display text-2xl font-bold text-[var(--color-text)]">
+                Không viết hộ — chỉ giúp bạn nhìn rõ mạch lập luận
+              </h2>
+              <p className="text-sm leading-relaxed text-[var(--color-text-muted)]">
+                Ở mỗi lượt, trợ lý phản hồi theo cấu trúc 3 lớp: ghi nhận điểm hợp lý, chỉ ra đúng 1 điểm hở hoặc giả định ngầm và đặt 1 câu hỏi Socrates trọng tâm.
+              </p>
+              <div className="pt-1">
+                <Link to="/lab" className="btn-primary !min-h-10 !px-5 !text-sm">
+                  Thử ngay trong AI Labs
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </div>
+            </div>
+
+            <div className="lg:col-span-7 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)]/65 p-5 space-y-3">
+              <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] px-3.5 py-2.5 text-xs font-reading text-[var(--color-text)]">
+                <strong className="font-ui text-[var(--color-primary)]">Học sinh:</strong>{' '}
+                “Mị chạy theo A Phủ chỉ vì bản năng sống chứ không phải ý thức phản kháng.”
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-3">
+                  <div className="font-semibold text-[var(--color-success)]">1. Ghi nhận</div>
+                  <p className="mt-1 text-[var(--color-text-muted)]">
+                    Nhận ra vai trò bản năng sinh tồn là điểm tựa sát thực tế.
+                  </p>
+                </div>
+                <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-3">
+                  <div className="font-semibold text-[var(--color-gold)]">2. Điểm cần soi</div>
+                  <p className="mt-1 text-[var(--color-text-muted)]">
+                    Từ “chỉ vì” tạo song đề giả: liệu bản năng và lòng trắc ẩn có thể cùng tồn tại?
+                  </p>
+                </div>
+                <div className="rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-3">
+                  <div className="font-semibold text-[var(--color-primary)]">3. Câu hỏi Socrates</div>
+                  <p className="mt-1 text-[var(--color-text-muted)]">
+                    Nếu chỉ có bản năng trốn chạy, vì sao Mị lại khựng lại trước giọt nước mắt A Phủ?
+                  </p>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -332,7 +549,7 @@ export function HomePage() {
                 id="core-values-heading"
                 className="font-display text-lg sm:text-xl font-semibold tracking-tight text-[var(--color-text)]"
               >
-                Mạch Ngôn V1 — Hệ sinh thái học tập và tư duy toàn diện
+                Mạch Ngôn — Hệ sinh thái học tập và tư duy ngôn ngữ
               </h2>
             </div>
 
@@ -367,7 +584,7 @@ export function HomePage() {
         </div>
       </main>
 
-      {/* Refined Compact Editorial Footer (Deep ink bar in light presets matching reference; muted surface in dark mode) */}
+      {/* Refined Compact Editorial Footer */}
       <footer
         className="border-t border-[var(--color-border)] transition-colors duration-250"
         style={
@@ -380,16 +597,22 @@ export function HomePage() {
           <div className="flex items-center gap-3">
             <BrandLogo size="sm" showWordmark={false} inverted={!isDark} />
             <div>
-              <div className="font-display text-base font-bold tracking-tight">MẠCH NGÔN V1</div>
+              <div className="font-display text-base font-bold tracking-tight">MẠCH NGÔN</div>
               <div className="text-xs opacity-75">
-                Tri thức để hiểu · Tư duy để khám phá · Dự án học tập & nghiên cứu ngôn ngữ.
+                Tri thức để hiểu · Tư duy để khám phá · Dự án học tập THPT Trần Phú, Bà Rịa – Vũng Tàu.
               </div>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs font-medium">
+            <Link to="/about" className="opacity-85 hover:opacity-100 hover:underline transition-opacity">
+              Giới thiệu
+            </Link>
             <Link to="/library" className="opacity-85 hover:opacity-100 hover:underline transition-opacity">
               AI Library
+            </Link>
+            <Link to="/glossary" className="opacity-85 hover:opacity-100 hover:underline transition-opacity">
+              Thuật ngữ
             </Link>
             <Link to="/lab" className="opacity-85 hover:opacity-100 hover:underline transition-opacity">
               AI Labs
@@ -397,14 +620,11 @@ export function HomePage() {
             <Link to="/guide" className="opacity-85 hover:opacity-100 hover:underline transition-opacity">
               Hướng dẫn
             </Link>
-            <Link to="/onboarding" className="opacity-85 hover:opacity-100 hover:underline transition-opacity">
-              Khảo sát học tập
-            </Link>
             <Link to="/profile" className="opacity-85 hover:opacity-100 hover:underline transition-opacity">
               Hồ sơ & Bảng màu
             </Link>
             <span className="opacity-30 hidden sm:inline" aria-hidden="true">|</span>
-            <span className="font-normal opacity-75">Cùng bạn trên hành trình tri thức · © 2026</span>
+            <span className="font-normal opacity-75">© 2026 Mạch Ngôn</span>
           </div>
         </div>
       </footer>

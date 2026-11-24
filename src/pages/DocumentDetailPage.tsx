@@ -2,19 +2,30 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   ArrowLeft,
+  Award,
   Bookmark,
   BookOpen,
   Check,
+  CheckCheck,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
+  Clock,
   ExternalLink,
   FileWarning,
+  Flag,
+  HelpCircle,
+  Highlighter,
   Lightbulb,
   List,
+  Loader2,
   Maximize2,
   Minimize2,
+  MoreHorizontal,
   NotebookPen,
   Pencil,
+  RotateCcw,
+  Send,
   Share2,
   Sparkles,
   Trash2,
@@ -23,11 +34,15 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { dispatchQuickExplain } from '../components/dictionary/QuickDictionarySuite';
-import { WorkspaceShell } from '../components/layout/AppShell';
+import { PublicHeader, WorkspaceShell } from '../components/layout/AppShell';
 import {
   ConceptPopoverDialog,
   renderTextWithConceptHighlights,
 } from '../components/library/ConceptTooltip';
+import {
+  DocumentFeedbackSection,
+  DocumentReportModal,
+} from '../components/library/DocumentFeedbackSection';
 import {
   LibraryLabActionOption,
   LibraryToLabActionsMenu,
@@ -37,25 +52,47 @@ import { useToast } from '../components/ui/ToastProvider';
 import { ChapterDividerSvg } from '../components/visuals/EditorialSvgIllustrations';
 import { HybridMediaCard } from '../components/visuals/ThemeSyncedHero';
 import { LIBRARY_CONCEPTS } from '../content/library/concepts';
+import { LEGACY_DOCUMENT_ID_ALIAS } from '../content/library/v2Adapter';
+import {
+  buildGlossaryQuickQuiz,
+  countWords,
+  RUBRIC_CRITERIA,
+  splitVietnameseSentences,
+  TOULMIN_ROLES,
+} from '../lib/ai/v2Pedagogy';
 import { useApp } from '../lib/AppContext';
+import { buildAuthRedirectUrl } from '../lib/authGuard';
 import { getRelatedDocuments } from '../lib/library/recommendations';
 import {
+  deriveDocumentToc,
+  estimateReadingMinutes,
   getDifficultyLabel,
   isDocumentVerified,
   isSafeHttpUrl,
 } from '../lib/library/validation';
 import { Link, useRouter } from '../lib/router';
 import {
+  loadDocStances,
   loadReadingScrollPosition,
   READING_FONT_SIZE_OPTIONS,
   ReadingFontSize,
+  saveDocStance,
   saveReadingScrollPosition,
   setLabHandoff,
 } from '../lib/storage';
-import { DocumentBlock, LabActionIntent, LabType, LibraryConcept } from '../lib/types';
+import {
+  DocumentBlock,
+  LabActionIntent,
+  LabType,
+  LibraryConcept,
+  RubricEvaluationResult,
+  ToulminRole,
+} from '../lib/types';
+import { annotateToulminWithV2, evaluateRubricWithV2 } from '../services/aiService';
 
 interface SelectionPopoverState {
   text: string;
+  contextSnippet: string;
   x: number;
   y: number;
 }
@@ -75,10 +112,17 @@ function formatNoteTimestamp(iso: string): string {
 
 export function DocumentDetailPage({ documentId }: { documentId: string }) {
   const {
+    user,
     documents,
     publishedDocuments,
+    publishedCollections,
     savedDocIds,
     toggleSavedDoc,
+    completedDocIds,
+    toggleCompletedDoc,
+    markDocOpened,
+    activeJourneyId,
+    addRubricScore,
     notes,
     addReadingNote,
     updateReadingNote,
@@ -94,11 +138,23 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
     [urlSearch]
   );
 
+  const resolvedDocumentId = LEGACY_DOCUMENT_ID_ALIAS[documentId] ?? documentId;
+
   // Strict lookup — NEVER fall back silently to documents[0]
   const doc = useMemo(
-    () => documents.find((d) => d.id === documentId) ?? null,
-    [documents, documentId]
+    () => documents.find((d) => d.id === resolvedDocumentId) ?? null,
+    [documents, resolvedDocumentId]
   );
+
+  // Automatically derived TOC — 100% synced with actual heading blocks in the document
+  const tocItems = useMemo(() => (doc ? deriveDocumentToc(doc) : []), [doc]);
+  const blockToAnchorMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of tocItems) {
+      map.set(item.blockId, item.id);
+    }
+    return map;
+  }, [tocItems]);
 
   const relatedDocs = useMemo(
     () => (doc ? getRelatedDocuments(doc, publishedDocuments, 3) : []),
@@ -118,15 +174,37 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
     [notes, doc]
   );
 
+  const quickQuiz = useMemo(
+    () => (doc ? buildGlossaryQuickQuiz(doc, LIBRARY_CONCEPTS) : []),
+    [doc]
+  );
+
   const [focusMode, setFocusMode] = useState(false);
   const [readProgress, setReadProgress] = useState(0);
-  const [activeSectionId, setActiveSectionId] = useState<string>(doc?.sections[0]?.id ?? '');
+  const [activeSectionId, setActiveSectionId] = useState<string>(tocItems[0]?.id ?? '');
   const [noteInput, setNoteInput] = useState('');
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingNoteValue, setEditingNoteValue] = useState('');
   const [openBlockMenuId, setOpenBlockMenuId] = useState<string | null>(null);
   const [selectionPopover, setSelectionPopover] = useState<SelectionPopoverState | null>(null);
   const [activeConcept, setActiveConcept] = useState<LibraryConcept | null>(null);
+  const [stanceInput, setStanceInput] = useState('');
+  const [rubricResult, setRubricResult] = useState<RubricEvaluationResult | null>(null);
+  const [rubricLoading, setRubricLoading] = useState(false);
+  const [toulminMode, setToulminMode] = useState(false);
+  const [activeToulminRole, setActiveToulminRole] = useState<ToulminRole>('claim');
+  const [toulminAssignments, setToulminAssignments] = useState<Record<string, ToulminRole>>({});
+  const [toulminCompare, setToulminCompare] = useState<{
+    blockId: string;
+    roles: ToulminRole[];
+    why: string[];
+    source: 'ai' | 'local';
+    fallbackReason?: string;
+  } | null>(null);
+  const [toulminComparingId, setToulminComparingId] = useState<string | null>(null);
+  const [quizAnswers, setQuizAnswers] = useState<Record<number, number>>({});
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
 
   const [slideOverToolsOpen, setSlideOverToolsOpen] = useState(false);
   const [mobileSheet, setMobileSheet] = useState<'none' | 'toc' | 'tools'>('none');
@@ -137,15 +215,39 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
 
   const fontSize: ReadingFontSize = layoutPrefs.readingFontSize ?? 'md';
 
-  // Reset active section when switching documents
+  const requireAuthForAction = useCallback(
+    (redirectPath?: string): boolean => {
+      if (user.isAuthenticated) return true;
+      const target = redirectPath ?? `/library/${encodeURIComponent(documentId)}`;
+      navigate(buildAuthRedirectUrl(target));
+      return false;
+    },
+    [user.isAuthenticated, documentId, navigate]
+  );
+
+  // Track opened document and reset per-article practice states when switching documents
   useEffect(() => {
-    if (doc?.sections[0]?.id) {
-      setActiveSectionId(doc.sections[0].id);
+    if (doc && doc.status === 'published') {
+      markDocOpened(doc.id);
+      const savedStances = loadDocStances();
+      setStanceInput(savedStances[doc.id] ?? '');
+    } else {
+      setStanceInput('');
+    }
+    if (tocItems[0]?.id) {
+      setActiveSectionId(tocItems[0].id);
     }
     setOpenBlockMenuId(null);
     setSelectionPopover(null);
     setEditingNoteId(null);
-  }, [doc?.id]);
+    setMobileMoreOpen(false);
+    setRubricResult(null);
+    setRubricLoading(false);
+    setToulminMode(false);
+    setToulminAssignments({});
+    setToulminCompare(null);
+    setQuizAnswers({});
+  }, [doc?.id, doc?.status, markDocOpened, tocItems]);
 
   // Restore saved reading position from sessionStorage (`machngon_read_pos_{resource_id}`)
   useEffect(() => {
@@ -172,8 +274,8 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
       const pct = docHeight > 0 ? Math.min(100, Math.max(0, (scrollY / docHeight) * 100)) : 0;
       setReadProgress(pct);
 
-      let nearest = doc.sections[0]?.id;
-      for (const sec of doc.sections) {
+      let nearest = tocItems[0]?.id;
+      for (const sec of tocItems) {
         const el = document.getElementById(sec.id);
         if (el) {
           const rect = el.getBoundingClientRect();
@@ -200,7 +302,7 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
       window.removeEventListener('scroll', handleScroll);
       window.clearTimeout(debounceTimer);
     };
-  }, [doc]);
+  }, [doc, tocItems]);
 
   // Keyboard shortcut 'F' to toggle Focus Mode, 'Esc' to close popovers/Focus Mode
   useEffect(() => {
@@ -218,12 +320,13 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
       } else if (e.key === 'Escape') {
         if (openBlockMenuId) setOpenBlockMenuId(null);
         else if (selectionPopover) setSelectionPopover(null);
+        else if (mobileMoreOpen) setMobileMoreOpen(false);
         else if (focusMode) setFocusMode(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [focusMode, openBlockMenuId, selectionPopover]);
+  }, [focusMode, openBlockMenuId, selectionPopover, mobileMoreOpen]);
 
   // Desktop text selection (15–600 characters) floating 5-action Popover
   const handleArticleMouseUp = useCallback(() => {
@@ -240,14 +343,22 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
     }
     const range = sel.getRangeAt(0);
     const rect = range.getBoundingClientRect();
+    const anchorEl =
+      sel.anchorNode instanceof HTMLElement
+        ? sel.anchorNode
+        : sel.anchorNode?.parentElement ?? null;
+    const blockHost = anchorEl?.closest('p, li, blockquote, section') ?? anchorEl;
+    const contextSnippet =
+      blockHost?.textContent?.replace(/\s+/g, ' ').trim().slice(0, 340) ?? text;
     setSelectionPopover({
       text,
+      contextSnippet,
       x: Math.max(190, Math.min(window.innerWidth - 190, rect.left + rect.width / 2)),
       y: Math.max(88, rect.top - 12),
     });
   }, []);
 
-  // Handoff to Thinking Lab (prefills Composer without auto-sending, saves current scroll first)
+  // Handoff to Thinking Lab (requires login for guests; prefills Composer without auto-sending)
   const handoffToLab = (
     labType: LabType,
     quoteText: string,
@@ -256,19 +367,12 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
       sectionId?: string;
       sectionTitle?: string;
       actionIntent?: LabActionIntent;
+      question?: string;
     }
   ) => {
     if (!doc) return;
-    const scrollY = window.scrollY;
-    const docHeight = document.documentElement.scrollHeight - window.innerHeight;
-    const pct = docHeight > 0 ? Math.min(100, Math.max(0, (scrollY / docHeight) * 100)) : 0;
-    saveReadingScrollPosition(doc.id, {
-      scrollPercent: pct,
-      scrollY,
-      nearestHeadingId: options?.sectionId ?? activeSectionId,
-      updatedAt: new Date().toISOString(),
-    });
-    const matchedSection = doc.sections.find(
+    const labUrl = `/lab?mode=${labType}&resource=${encodeURIComponent(doc.id)}`;
+    const matchedSection = tocItems.find(
       (s) => s.id === (options?.sectionId ?? activeSectionId)
     );
     setLabHandoff({
@@ -280,10 +384,22 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
       sectionId: options?.sectionId ?? activeSectionId,
       sectionTitle: options?.sectionTitle ?? matchedSection?.title,
       actionIntent: options?.actionIntent,
+      question: options?.question,
+    });
+    if (!requireAuthForAction(labUrl)) return;
+
+    const scrollY = window.scrollY;
+    const docHeight = document.documentElement.scrollHeight - window.innerHeight;
+    const pct = docHeight > 0 ? Math.min(100, Math.max(0, (scrollY / docHeight) * 100)) : 0;
+    saveReadingScrollPosition(doc.id, {
+      scrollPercent: pct,
+      scrollY,
+      nearestHeadingId: options?.sectionId ?? activeSectionId,
+      updatedAt: new Date().toISOString(),
     });
     setOpenBlockMenuId(null);
     setSelectionPopover(null);
-    navigate(`/lab?mode=${labType}&resource=${encodeURIComponent(doc.id)}`);
+    navigate(labUrl);
   };
 
   const handleLabActionSelect = (
@@ -299,6 +415,7 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
 
   // Trigger "Ghi chú" action smoothly across all breakpoints
   const handleOpenNotes = () => {
+    if (!requireAuthForAction()) return;
     if (window.innerWidth < 1024) {
       setMobileSheet('tools');
       return;
@@ -316,63 +433,441 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
     }, 80);
   };
 
-  // 1. NOT FOUND state (fixes previous silent fallback to documents[0])
+  const handleShareLink = async () => {
+    if (!doc) return;
+    const shareUrl = `${window.location.origin}/library/${encodeURIComponent(doc.id)}`;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      showToast('Đã sao chép liên kết bài đọc để chia sẻ.', { variant: 'success' });
+    } catch {
+      showToast('Không thể sao chép liên kết tự động trên trình duyệt này.', {
+        variant: 'warning',
+      });
+    }
+  };
+
+  const wrapWithShell = (content: React.ReactNode) => {
+    if (focusMode) {
+      return <div className="min-h-dvh bg-[var(--color-bg)] text-[var(--color-text)] overflow-x-clip">{content}</div>;
+    }
+    if (user.isAuthenticated) {
+      return <WorkspaceShell>{content}</WorkspaceShell>;
+    }
+    return (
+      <div className="min-h-dvh bg-[var(--color-bg)] text-[var(--color-text)] flex flex-col overflow-x-clip">
+        <PublicHeader />
+        <main className="flex-1 min-w-0">{content}</main>
+      </div>
+    );
+  };
+
+  // 1. NOT FOUND state
   if (!doc) {
-    return (
-      <WorkspaceShell>
-        <div className="mx-auto max-w-2xl px-6 py-20 text-center space-y-5">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--color-surface-elevated)] text-[var(--color-primary)]">
-            <AlertCircle className="h-7 w-7" aria-hidden="true" />
-          </div>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold text-[var(--color-text)]">
-            Không tìm thấy tài liệu
-          </h1>
-          <p className="font-reading text-sm sm:text-base text-[var(--color-text-muted)] max-w-md mx-auto leading-relaxed">
-            Liên kết tài liệu bạn truy cập không tồn tại hoặc đã được di chuyển khỏi Thư viện Tri thức.
-          </p>
-          <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
-            <Link to="/library" className="btn-primary">
-              <ArrowLeft className="h-4 w-4" />
-              Quay lại Thư viện Tri thức
-            </Link>
-            <Link to="/lab" className="btn-secondary">
-              Mở Thinking Lab
-            </Link>
-          </div>
+    return wrapWithShell(
+      <div className="mx-auto max-w-2xl px-6 py-20 text-center space-y-5">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--color-surface-elevated)] text-[var(--color-primary)]">
+          <AlertCircle className="h-7 w-7" aria-hidden="true" />
         </div>
-      </WorkspaceShell>
+        <h1 className="font-display text-2xl sm:text-3xl font-bold text-[var(--color-text)]">
+          Không tìm thấy tài liệu
+        </h1>
+        <p className="font-reading text-sm sm:text-base text-[var(--color-text-muted)] max-w-md mx-auto leading-relaxed">
+          Liên kết tài liệu bạn truy cập không tồn tại hoặc đã được di chuyển khỏi Thư viện Tri thức.
+        </p>
+        <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
+          <Link to="/library" className="btn-primary">
+            <ArrowLeft className="h-4 w-4" />
+            Quay lại Thư viện Tri thức
+          </Link>
+          <Link to="/lab" className="btn-secondary">
+            Mở Thinking Lab
+          </Link>
+        </div>
+      </div>
     );
   }
 
-  // 2. DRAFT guard (never expose drafts publicly unless explicitly previewed from Admin)
+  // 2. DRAFT guard
   if (doc.status !== 'published' && !isAdminPreview) {
-    return (
-      <WorkspaceShell>
-        <div className="mx-auto max-w-2xl px-6 py-20 text-center space-y-5">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--color-surface-elevated)] text-[var(--color-gold)]">
-            <FileWarning className="h-7 w-7" aria-hidden="true" />
-          </div>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold text-[var(--color-text)]">
-            Tài liệu đang ở trạng thái bản nháp
-          </h1>
-          <p className="font-reading text-sm sm:text-base text-[var(--color-text-muted)] max-w-md mx-auto leading-relaxed">
-            Bài đọc “{doc.title}” hiện đang trong quá trình biên tập và kiểm chứng nguồn nên chưa được công bố trong Thư viện.
-          </p>
-          <div className="pt-2">
-            <Link to="/library" className="btn-primary">
-              <ArrowLeft className="h-4 w-4" />
-              Khám phá tài liệu đã xuất bản
-            </Link>
-          </div>
+    return wrapWithShell(
+      <div className="mx-auto max-w-2xl px-6 py-20 text-center space-y-5">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--color-surface-elevated)] text-[var(--color-gold)]">
+          <FileWarning className="h-7 w-7" aria-hidden="true" />
         </div>
-      </WorkspaceShell>
+        <h1 className="font-display text-2xl sm:text-3xl font-bold text-[var(--color-text)]">
+          Tài liệu đang ở trạng thái bản nháp
+        </h1>
+        <p className="font-reading text-sm sm:text-base text-[var(--color-text-muted)] max-w-md mx-auto leading-relaxed">
+          Bài đọc “{doc.title}” hiện đang trong quá trình biên tập và kiểm chứng nguồn nên chưa được công bố trong Thư viện.
+        </p>
+        <div className="pt-2">
+          <Link to="/library" className="btn-primary">
+            <ArrowLeft className="h-4 w-4" />
+            Khám phá tài liệu đã xuất bản
+          </Link>
+        </div>
+      </div>
     );
   }
 
-  const isSaved = savedDocIds.includes(doc.id);
+  const isSaved = user.isAuthenticated && savedDocIds.includes(doc.id);
+  const isCompleted = completedDocIds.includes(doc.id);
   const verified = isDocumentVerified(doc);
+  const readingMinutes = estimateReadingMinutes(doc.blocks, doc.excerpt);
   const activeSectionTitle =
-    doc.sections.find((s) => s.id === activeSectionId)?.title ?? doc.sections[0]?.title;
+    tocItems.find((s) => s.id === activeSectionId)?.title ?? tocItems[0]?.title;
+
+  const activeJourney = useMemo(() => {
+    if (activeJourneyId) {
+      const chosen = publishedCollections.find(
+        (col) => col.id === activeJourneyId && col.documentIds.includes(doc.id)
+      );
+      if (chosen) return chosen;
+    }
+    return publishedCollections.find((col) => col.documentIds.includes(doc.id)) ?? null;
+  }, [activeJourneyId, publishedCollections, doc.id]);
+
+  const journeyPosition = useMemo(() => {
+    if (!activeJourney) return null;
+    const idx = activeJourney.documentIds.indexOf(doc.id);
+    if (idx < 0) return null;
+    const prevId = idx > 0 ? activeJourney.documentIds[idx - 1] : null;
+    const nextId =
+      idx < activeJourney.documentIds.length - 1 ? activeJourney.documentIds[idx + 1] : null;
+    return {
+      index: idx,
+      total: activeJourney.documentIds.length,
+      prevDoc: prevId ? publishedDocuments.find((d) => d.id === prevId) ?? null : null,
+      nextDoc: nextId ? publishedDocuments.find((d) => d.id === nextId) ?? null : null,
+    };
+  }, [activeJourney, doc.id, publishedDocuments]);
+
+  const handleToggleSave = () => {
+    if (!requireAuthForAction()) return;
+    toggleSavedDoc(doc.id);
+    showToast(
+      isSaved
+        ? 'Đã bỏ lưu tài liệu khỏi tủ sách.'
+        : 'Đã lưu tài liệu vào tủ sách cá nhân.',
+      { variant: isSaved ? 'info' : 'success' }
+    );
+  };
+
+  const handleToggleCompleted = () => {
+    toggleCompletedDoc(doc.id);
+    showToast(
+      isCompleted ? 'Đã bỏ đánh dấu hoàn thành bài đọc.' : 'Đã đánh dấu hoàn thành bài đọc.',
+      { variant: isCompleted ? 'info' : 'success' }
+    );
+  };
+
+  const handleStanceChange = (value: string) => {
+    setStanceInput(value);
+    saveDocStance(doc.id, value);
+  };
+
+  const handleSaveStanceToNotes = () => {
+    if (!requireAuthForAction()) return;
+    const trimmed = stanceInput.trim();
+    if (trimmed.length < 10) {
+      showToast('Hãy viết lập trường của bạn (khoảng 3–5 câu) trước khi lưu.', { variant: 'warning' });
+      return;
+    }
+    addReadingNote(doc.id, `Lập trường cá nhân: ${trimmed}`, undefined, activeSectionId, 'Thực hành cuối bài');
+    showToast('Đã lưu lập trường của bạn vào Ghi chú đọc sâu.', { variant: 'success' });
+  };
+
+  const handleEvaluateStance = async () => {
+    const trimmed = stanceInput.trim();
+    const sentences = splitVietnameseSentences(trimmed);
+    if (sentences.length < 3) {
+      showToast(
+        'Vui lòng viết ít nhất 3 câu hoàn chỉnh (lập trường, lí do và dẫn chứng/phản đề) để AI chấm theo 5 tiêu chí.',
+        { variant: 'warning' }
+      );
+      return;
+    }
+    setRubricLoading(true);
+    try {
+      const res = await evaluateRubricWithV2(trimmed, doc.title);
+      setRubricResult(res);
+      addRubricScore({
+        docId: doc.id,
+        title: doc.title,
+        mode: 'library_stance',
+        scores: res.scores,
+        words: countWords(trimmed),
+      });
+      showToast(
+        res.source === 'ai'
+          ? 'Đã chấm lập trường theo 5 tiêu chí và lưu vào Bản đồ kỹ năng.'
+          : 'Đã phân tích lập trường bằng bộ chấm cục bộ và lưu vào Bản đồ kỹ năng.',
+        { variant: res.source === 'ai' ? 'success' : 'info' }
+      );
+    } finally {
+      setRubricLoading(false);
+    }
+  };
+
+  const handleCompareToulminBlock = async (blockId: string, sentences: string[]) => {
+    if (sentences.length === 0) return;
+    setToulminComparingId(blockId);
+    try {
+      const res = await annotateToulminWithV2(sentences);
+      setToulminCompare({
+        blockId,
+        roles: res.roles,
+        why: res.why,
+        source: res.source,
+        fallbackReason: res.fallbackReason,
+      });
+    } finally {
+      setToulminComparingId(null);
+    }
+  };
+
+  const handleSendStanceToLab = () => {
+    const trimmed = stanceInput.trim();
+    const promptText =
+      trimmed.length >= 10
+        ? `Lập trường của tôi về bài "${doc.title}": ${trimmed}`
+        : `Tôi muốn tranh biện về câu hỏi trọng tâm của bài "${doc.title}": ${
+            doc.blocks.find((b) => b.type === 'question')?.content ?? doc.excerpt
+          }`;
+    handoffToLab('debate', promptText, {
+      blockLabel: 'Lập trường của bạn',
+      sectionId: activeSectionId,
+      sectionTitle: activeSectionTitle,
+      actionIntent: 'debate_claim',
+    });
+  };
+
+  const renderToulminText = (blockId: string, text: string) => {
+    const sentences = splitVietnameseSentences(text);
+    const compareHit = toulminCompare?.blockId === blockId ? toulminCompare : null;
+
+    return (
+      <div className="space-y-3 mt-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+          <span className="text-[var(--color-text-muted)]">
+            Bấm từng câu để gắn vai trò đang chọn (<span className="font-mono-num">{sentences.length}</span> câu)
+          </span>
+          <button
+            type="button"
+            disabled={toulminComparingId === blockId || sentences.length === 0}
+            onClick={() => void handleCompareToulminBlock(blockId, sentences)}
+            className="btn-secondary !min-h-8 !px-3 !py-1 !text-xs whitespace-nowrap"
+          >
+            {toulminComparingId === blockId ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Đang đối chiếu…
+              </>
+            ) : (
+              <>
+                <ListChecks className="h-3.5 w-3.5 text-[var(--color-primary)]" />
+                So với gợi ý
+              </>
+            )}
+          </button>
+        </div>
+
+        <p className="editorial-prose leading-[1.95]">
+          {sentences.map((sent, sIdx) => {
+            const key = `${blockId}:${sIdx}`;
+            const userRole = toulminAssignments[key] ?? 'none';
+            const suggestedRole = compareHit?.roles[sIdx];
+            const isMismatch =
+              Boolean(compareHit) &&
+              userRole !== 'none' &&
+              suggestedRole !== undefined &&
+              userRole !== suggestedRole;
+            const roleMeta = TOULMIN_ROLES.find((r) => r.key === userRole);
+
+            return (
+              <button
+                key={key}
+                type="button"
+                data-role={userRole}
+                data-mismatch={isMismatch ? 'true' : undefined}
+                title={
+                  roleMeta
+                    ? `${roleMeta.label}${compareHit && suggestedRole ? ` · Gợi ý: ${TOULMIN_ROLES.find((r) => r.key === suggestedRole)?.label ?? 'Dẫn dắt'}` : ''}`
+                    : 'Bấm để gắn nhãn Toulmin cho câu này'
+                }
+                onClick={() => {
+                  setToulminAssignments((prev) => ({
+                    ...prev,
+                    [key]: prev[key] === activeToulminRole ? 'none' : activeToulminRole,
+                  }));
+                }}
+                className="toulmin-sent inline text-left font-reading"
+              >
+                {sent}
+              </button>
+            );
+          })}
+        </p>
+
+        {compareHit && (
+          <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)]/70 p-3.5 text-xs space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-semibold text-[var(--color-text)]">
+                Đối chiếu gợi ý Toulmin ({compareHit.source === 'ai' ? 'AI' : 'Phân tích từ khóa cục bộ'})
+              </span>
+              {compareHit.fallbackReason && (
+                <span className="text-[11px] text-[var(--color-text-muted)]">
+                  {compareHit.fallbackReason}
+                </span>
+              )}
+            </div>
+            <ul className="space-y-1 text-[var(--color-text-muted)]">
+              {sentences.map((sent, sIdx) => {
+                const sug = compareHit.roles[sIdx] ?? 'none';
+                const label = TOULMIN_ROLES.find((r) => r.key === sug)?.label ?? 'Dẫn dắt / nền';
+                const why = compareHit.why[sIdx];
+                return (
+                  <li key={`${blockId}-sug-${sIdx}`} className="flex items-start gap-2">
+                    <span className="font-mono-num font-semibold text-[var(--color-primary)] shrink-0">
+                      Câu {sIdx + 1}:
+                    </span>
+                    <span>
+                      <strong className="text-[var(--color-text)]">{label}</strong>
+                      {why ? ` — ${why}` : ` (“${sent.slice(0, 48)}${sent.length > 48 ? '…' : ''}”)`}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderStancePracticeBox = (boxId: string) => {
+    const words = countWords(stanceInput);
+    const sentencesCount = splitVietnameseSentences(stanceInput).length;
+    return (
+      <div className="mt-5 pt-4 border-t border-[var(--color-border)] space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <label
+              htmlFor={`stance-box-${boxId}`}
+              className="block text-xs font-semibold text-[var(--color-text)]"
+            >
+              Viết lập trường của bạn (từ 3 câu trở lên)
+            </label>
+            <p className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
+              Nêu rõ quan điểm, dẫn chứng kiểm chứng được, giả định ngầm và xét ý kiến trái chiều.
+            </p>
+          </div>
+          <span className="font-mono-num text-[11px] text-[var(--color-text-muted)]">
+            {words} chữ · {sentencesCount} câu
+          </span>
+        </div>
+
+        <textarea
+          id={`stance-box-${boxId}`}
+          rows={4}
+          value={stanceInput}
+          onChange={(e) => handleStanceChange(e.target.value)}
+          placeholder="Theo tôi, ranh giới cốt lõi nằm ở… Lý do là… Ví dụ cụ thể… Tuy nhiên có ý kiến cho rằng…"
+          className="textarea-editorial !text-sm resize-y"
+        />
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={rubricLoading}
+            onClick={() => void handleEvaluateStance()}
+            className="btn-primary !min-h-9 !px-3.5 !text-xs"
+          >
+            {rubricLoading ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                Đang chấm theo 5 tiêu chí…
+              </>
+            ) : (
+              <>
+                <Award className="h-3.5 w-3.5" aria-hidden="true" />
+                Chấm theo 5 tiêu chí
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={handleSendStanceToLab}
+            className="btn-secondary !min-h-9 !px-3.5 !text-xs"
+          >
+            <Send className="h-3.5 w-3.5 text-[var(--color-primary)]" aria-hidden="true" />
+            Mở trong Thinking Lab
+          </button>
+          <button
+            type="button"
+            onClick={handleSaveStanceToNotes}
+            className="btn-secondary !min-h-9 !px-3.5 !text-xs"
+          >
+            <NotebookPen className="h-3.5 w-3.5" aria-hidden="true" />
+            Lưu vào Ghi chú
+          </button>
+        </div>
+
+        {rubricResult && (
+          <div className="mt-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--color-border)]">
+              <strong className="font-display text-sm text-[var(--color-text)]">
+                Phản hồi theo 5 tiêu chí (thang 1–3)
+              </strong>
+              <span className="text-[11px] font-medium text-[var(--color-primary)]">
+                {rubricResult.source === 'ai' ? 'Đánh giá bởi AI' : 'Phân tích cục bộ (tham khảo)'}
+              </span>
+            </div>
+
+            {rubricResult.fallbackReason && (
+              <p className="text-[11px] text-[var(--color-text-muted)]">
+                {rubricResult.fallbackReason}
+              </p>
+            )}
+
+            <div className="divide-y divide-[var(--color-border)]/70">
+              {RUBRIC_CRITERIA.map((criterion) => {
+                const score = rubricResult.scores[criterion.key];
+                const comment = rubricResult.comments[criterion.key] ?? criterion.levels[score - 1];
+                return (
+                  <div
+                    key={criterion.key}
+                    className="py-2 flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 sm:gap-4"
+                  >
+                    <div className="flex items-center justify-between sm:w-52 shrink-0 gap-2">
+                      <span className="font-semibold text-[var(--color-text)]">
+                        {criterion.label}
+                      </span>
+                      <span className="font-mono-num font-bold text-[var(--color-primary)]">
+                        {score}/3
+                      </span>
+                    </div>
+                    <span className="text-[var(--color-text-muted)] leading-relaxed flex-1">
+                      {comment}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="pt-2 border-t border-[var(--color-border)] space-y-1.5">
+              <p className="text-[var(--color-text)]">
+                <strong>Việc nên sửa tiếp theo:</strong> {rubricResult.next}
+              </p>
+              <p className="text-[var(--color-primary)] font-medium">
+                <strong>Câu hỏi Socrates:</strong> {rubricResult.question}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const renderBlock = (block: DocumentBlock, idx: number) => {
     const menuOpen = openBlockMenuId === block.id;
@@ -381,10 +876,11 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
     const isCounterBlock = block.type === 'counterargument';
     const isQuestionBlock = block.type === 'question';
     const isOpeningProse = idx === 0 && block.type === 'prose';
-    const sectionObj = doc.sections.find((s) => s.id === block.sectionId);
+    const anchorId = blockToAnchorMap.get(block.id);
+    const sectionObj = tocItems.find((s) => s.id === anchorId);
 
     const containerClass = isConceptBlock
-      ? 'my-8 rounded-2xl p-6 sm:p-7 border'
+      ? 'my-8 rounded-2xl p-5 sm:p-7 border'
       : isQuoteBlock
         ? 'my-8 py-6 px-5 sm:px-7 border-y border-[var(--color-border)] bg-[var(--color-bg)]/45'
         : isCounterBlock
@@ -400,10 +896,23 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
             setActiveConcept(concept)
           );
 
+    const matchedCorpus =
+      block.label === 'Ngữ liệu đối chiếu' && doc.practiceCorpora?.length
+        ? doc.practiceCorpora.find((item) => item.title === block.heading)
+        : undefined;
+    const isHsgPromptBlock = block.heading === 'Đề bài & bối cảnh tham khảo';
+    const isKeyPointsBlock =
+      block.heading === 'Luận điểm cốt lõi' && (doc.keyPoints?.length ?? 0) > 0;
+    const isExamplesBlock =
+      block.heading === 'Ví dụ minh họa' && (doc.examples?.length ?? 0) > 0;
+    const isThinkingQuestionsBlock =
+      block.heading === 'Câu hỏi gợi mở & phản biện' &&
+      (doc.thinkingQuestions?.length ?? 0) > 0;
+
     return (
       <div
         key={block.id}
-        id={block.heading ? block.sectionId : undefined}
+        id={anchorId}
         className={`relative scroll-mt-24 ${containerClass}`}
         style={
           isConceptBlock
@@ -417,8 +926,8 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
         }
       >
         {/* Top Row: Block label/heading + 5-Action "Khám phá với AI" trigger */}
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
+        <div className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
             {isConceptBlock ? (
               <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-primary)] mb-1.5">
                 {block.label || 'Khái niệm trọng tâm'}
@@ -431,7 +940,7 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
               )
             )}
             {block.heading && (
-              <h2 className="font-display lib-scale-h2 font-semibold text-[var(--color-text)]">
+              <h2 className="font-display lib-scale-h2 font-semibold text-[var(--color-text)] break-words">
                 {block.heading}
               </h2>
             )}
@@ -456,7 +965,7 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 4, scale: 0.98 }}
                   transition={{ duration: 0.16 }}
-                  className="absolute right-0 mt-1.5 z-30 w-72 sm:w-80 rounded-2xl p-2.5 border border-[var(--color-border-strong)] bg-[var(--color-surface)]"
+                  className="absolute right-0 mt-1.5 z-30 w-72 max-w-[calc(100vw-2rem)] sm:w-80 rounded-2xl p-2.5 border border-[var(--color-border-strong)] bg-[var(--color-surface)]"
                   style={{ boxShadow: 'var(--shadow-float)' }}
                 >
                   <div className="flex items-center justify-between px-2 pb-2 mb-1.5 border-b border-[var(--color-border)]">
@@ -479,7 +988,7 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
                         blockLabel: isConceptBlock
                           ? 'Khái niệm trọng tâm'
                           : block.label || block.heading,
-                        sectionId: block.sectionId,
+                        sectionId: anchorId,
                         sectionTitle: sectionObj?.title,
                       })
                     }
@@ -490,21 +999,139 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
           </div>
         </div>
 
-        <p
-          className={`mt-3.5 ${
-            isQuoteBlock
-              ? 'lib-scale-quote italic text-[var(--color-text)]'
-              : 'editorial-prose'
-          } ${isOpeningProse ? 'editorial-dropcap' : ''}`}
-        >
-          {renderedContent}
-        </p>
+        {/* HSG Quốc gia open-prompt notice */}
+        {isHsgPromptBlock && (
+          <div className="mt-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/80 px-3.5 py-2.5 text-xs text-[var(--color-text-muted)] leading-relaxed">
+            <strong>Lưu ý đề thi HSG Quốc gia:</strong> Hướng phân tích dưới đây là gợi ý mở theo phương pháp đọc – lập luận, không phải đáp án duy nhất.
+          </div>
+        )}
+
+        {/* Body rendering: Toulmin interactive vs structured V2 lists vs standard prose */}
+        {toulminMode && !isThinkingQuestionsBlock && !matchedCorpus ? (
+          renderToulminText(block.id, block.content)
+        ) : isKeyPointsBlock && doc.keyPoints ? (
+          <ol className="mt-4 space-y-2.5">
+            {doc.keyPoints.map((point, ptIdx) => (
+              <li
+                key={`${block.id}-kp-${ptIdx}`}
+                className="flex items-baseline gap-3 rounded-xl border border-[var(--color-border)]/70 bg-[var(--color-surface)]/80 px-4 py-3 font-reading text-[0.96rem] leading-relaxed text-[var(--color-text)]"
+              >
+                <span className="font-mono-num text-xs font-semibold text-[var(--color-primary)] shrink-0">
+                  {String(ptIdx + 1).padStart(2, '0')}.
+                </span>
+                <span>
+                  {renderTextWithConceptHighlights(point, docConcepts, (concept) =>
+                    setActiveConcept(concept)
+                  )}
+                </span>
+              </li>
+            ))}
+          </ol>
+        ) : isExamplesBlock && doc.examples ? (
+          <ul className="mt-4 space-y-2.5">
+            {doc.examples.map((ex, exIdx) => (
+              <li
+                key={`${block.id}-ex-${exIdx}`}
+                className="rounded-xl border border-[var(--color-border)]/70 bg-[var(--color-surface)]/85 px-4 py-3 font-reading text-[0.95rem] leading-relaxed text-[var(--color-text)]"
+              >
+                <span className="font-ui text-xs font-semibold text-[var(--color-primary)] mr-1.5">
+                  Ví dụ {exIdx + 1}:
+                </span>
+                {renderTextWithConceptHighlights(ex, docConcepts, (concept) =>
+                  setActiveConcept(concept)
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : matchedCorpus ? (
+          <div className="mt-3.5 space-y-3">
+            <blockquote className="font-reading lib-scale-quote italic text-[var(--color-text)] whitespace-pre-line leading-relaxed">
+              {matchedCorpus.text}
+            </blockquote>
+            {matchedCorpus.task && (
+              <p className="text-xs sm:text-sm text-[var(--color-text)] leading-relaxed">
+                <strong className="text-[var(--color-primary)]">Gợi ý đọc hiểu:</strong>{' '}
+                {matchedCorpus.task}
+              </p>
+            )}
+            {doc.fieldCode === 'vh' && (
+              <p className="text-[11px] text-[var(--color-text-muted)]">
+                Lưu ý bản in: Có thể có khác biệt nhỏ về dấu câu giữa các bộ SGK (Kết nối tri thức, Chân trời sáng tạo, Cánh diều).
+              </p>
+            )}
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() =>
+                  handoffToLab(
+                    matchedCorpus.mode || (doc.fieldCode === 'vh' ? 'read' : 'debate'),
+                    matchedCorpus.text,
+                    {
+                      blockLabel: matchedCorpus.title,
+                      sectionId: anchorId,
+                      sectionTitle: sectionObj?.title,
+                      actionIntent: doc.fieldCode === 'vh' ? 'explain' : 'debate_claim',
+                    }
+                  )
+                }
+                className="btn-secondary !min-h-9 !px-3.5 !text-xs"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-[var(--color-primary)]" aria-hidden="true" />
+                Phân tích ngữ liệu này trong AI Labs
+              </button>
+            </div>
+          </div>
+        ) : isThinkingQuestionsBlock && doc.thinkingQuestions ? (
+          <div className="mt-4 space-y-2.5">
+            {doc.thinkingQuestions.map((qText, qIdx) => (
+              <div
+                key={`${block.id}-q-${qIdx}`}
+                className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+              >
+                <p className="font-reading text-sm sm:text-[0.96rem] leading-relaxed text-[var(--color-text)]">
+                  <span className="font-mono-num text-xs font-semibold text-[var(--color-primary)] mr-2">
+                    {qIdx + 1}.
+                  </span>
+                  {qText}
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handoffToLab(doc.fieldCode === 'vh' ? 'read' : 'debate', qText, {
+                      blockLabel: 'Câu hỏi gợi mở',
+                      sectionId: anchorId,
+                      sectionTitle: sectionObj?.title,
+                      actionIntent: 'guiding_questions',
+                      question: qText,
+                    })
+                  }
+                  className="btn-secondary !min-h-8 !px-3 !py-1 !text-xs shrink-0 self-start sm:self-center whitespace-nowrap"
+                >
+                  Trả lời trong Lab
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p
+            className={`mt-3.5 whitespace-pre-line ${
+              isQuoteBlock
+                ? 'lib-scale-quote italic text-[var(--color-text)]'
+                : 'editorial-prose'
+            } ${isOpeningProse ? 'editorial-dropcap' : ''}`}
+          >
+            {renderedContent}
+          </p>
+        )}
 
         {block.citation && (
           <footer className="mt-4 pt-3 border-t border-[var(--color-border)]/80 font-reading lib-scale-small italic text-[var(--color-text-muted)]">
             Nguồn tham chiếu: {block.citation}
           </footer>
         )}
+
+        {/* Interactive Stance Practice Box embedded right inside the Discussion Question block */}
+        {isQuestionBlock && renderStancePracticeBox(block.id)}
       </div>
     );
   };
@@ -560,7 +1187,7 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
                   {rel.title}
                 </div>
                 <div className="mt-1 text-[11px] text-[var(--color-text-muted)] truncate">
-                  {rel.category} · {rel.readingMinutes} phút
+                  {rel.category} · {estimateReadingMinutes(rel.blocks, rel.excerpt)} phút
                 </div>
               </div>
             </Link>
@@ -582,6 +1209,7 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
         <form
           onSubmit={(e) => {
             e.preventDefault();
+            if (!requireAuthForAction()) return;
             if (!noteInput.trim()) return;
             addReadingNote(doc.id, noteInput, undefined, activeSectionId, activeSectionTitle);
             setNoteInput('');
@@ -599,15 +1227,19 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
             rows={3}
             value={noteInput}
             onChange={(e) => setNoteInput(e.target.value)}
-            placeholder="Ghi lại ý tưởng, thắc mắc hoặc phản đề vừa nảy ra..."
+            placeholder={
+              user.isAuthenticated
+                ? 'Ghi lại ý tưởng, thắc mắc hoặc phản đề vừa nảy ra...'
+                : 'Đăng nhập để lưu ghi chú bên lề cá nhân…'
+            }
             className="textarea-editorial !text-xs resize-none"
           />
           <button type="submit" className="btn-secondary w-full !min-h-9 !text-xs">
-            Lưu ghi chú đọc sâu
+            {user.isAuthenticated ? 'Lưu ghi chú đọc sâu' : 'Đăng nhập để ghi chú'}
           </button>
         </form>
 
-        {docNotes.length > 0 && (
+        {user.isAuthenticated && docNotes.length > 0 && (
           <ul className="mt-3.5 space-y-2.5">
             {docNotes.map((n) => {
               const isEditing = editingNoteId === n.id;
@@ -732,8 +1364,8 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
     </div>
   );
 
-  return (
-    <WorkspaceShell hideChrome={focusMode}>
+  return wrapWithShell(
+    <>
       {/* Hairline Reading Progress Bar */}
       <div
         aria-hidden="true"
@@ -800,14 +1432,15 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
               type="button"
               onClick={() => {
                 const selected = selectionPopover.text;
+                const snippet = selectionPopover.contextSnippet;
                 setSelectionPopover(null);
                 window.getSelection()?.removeAllRanges();
-                dispatchQuickExplain(selected, doc.title);
+                dispatchQuickExplain(selected, snippet, doc.title);
               }}
               className="mb-1.5 flex w-full items-center justify-center gap-1.5 rounded-xl border border-[var(--color-primary)]/40 bg-[color-mix(in_srgb,var(--color-primary)_8%,var(--color-surface)_92%)] px-3 py-2 text-xs font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-[var(--color-on-primary)] transition-colors cursor-pointer"
             >
               <Sparkles className="h-3.5 w-3.5 shrink-0" />
-              Giải thích nhanh nghĩa cụm từ này
+              Giải thích nghĩa cụm từ này
             </button>
             <LibraryToLabActionsMenu
               compact
@@ -823,14 +1456,18 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
         )}
       </AnimatePresence>
 
-      {/* Top Reading Toolbar */}
+      {/* Top Reading Toolbar — Zero horizontal overflow at 390px */}
       {!focusMode && (
-        <div className="sticky top-14 lg:top-0 z-20 border-b border-[var(--color-border)] bg-[var(--color-bg)]/94 backdrop-blur-md">
-          <div className="mx-auto max-w-[1400px] flex items-center justify-between gap-3 px-4 sm:px-6 h-14">
-            <div className="flex items-center gap-2.5 min-w-0">
+        <div
+          className={`sticky z-20 border-b border-[var(--color-border)] bg-[var(--color-bg)]/94 backdrop-blur-md ${
+            user.isAuthenticated ? 'top-14 lg:top-0' : 'top-16'
+          }`}
+        >
+          <div className="mx-auto max-w-[1400px] flex items-center justify-between gap-2 px-3 sm:px-6 h-14">
+            <div className="flex items-center gap-2 min-w-0">
               <Link
                 to="/library"
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text)] whitespace-nowrap transition-colors"
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text)] whitespace-nowrap transition-colors shrink-0"
               >
                 <ArrowLeft className="h-4 w-4" />
                 Library
@@ -849,9 +1486,8 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
               </nav>
             </div>
 
-            {/* Right Controls: Font Size · Focus · Share · Save · Notes · Open in Lab */}
+            {/* Right Controls: Desktop full toolbar · Mobile compact ("⋯" + Font + Mở Lab) */}
             <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-              {/* Font Size Selector (synced via --library-font-scale & localStorage) */}
               <LibraryFontSizeControl compact className="hidden sm:inline-flex" />
 
               <button
@@ -866,20 +1502,10 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
 
               <button
                 type="button"
-                onClick={async () => {
-                  const shareUrl = `${window.location.origin}/library/${encodeURIComponent(doc.id)}`;
-                  try {
-                    await navigator.clipboard.writeText(shareUrl);
-                    showToast('Đã sao chép liên kết bài đọc để chia sẻ.', { variant: 'success' });
-                  } catch {
-                    showToast('Không thể sao chép liên kết tự động trên trình duyệt này.', {
-                      variant: 'warning',
-                    });
-                  }
-                }}
+                onClick={handleShareLink}
                 aria-label="Chia sẻ liên kết tài liệu"
                 title="Chia sẻ liên kết tài liệu"
-                className="btn-secondary !min-h-9 !px-2.5 !py-1.5 !text-xs"
+                className="hidden sm:inline-flex btn-secondary !min-h-9 !px-2.5 !py-1.5 !text-xs"
               >
                 <Share2 className="h-3.5 w-3.5 text-[var(--color-primary)]" />
                 <span className="hidden xl:inline">Chia sẻ</span>
@@ -887,33 +1513,170 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
 
               <button
                 type="button"
-                onClick={() => {
-                  toggleSavedDoc(doc.id);
-                  showToast(
-                    isSaved
-                      ? 'Đã bỏ lưu tài liệu khỏi tủ sách.'
-                      : 'Đã lưu tài liệu vào tủ sách cá nhân.',
-                    { variant: isSaved ? 'info' : 'success' }
-                  );
-                }}
-                className={`btn-secondary !min-h-9 !px-3 !py-1.5 !text-xs ${
+                onClick={() => setToulminMode((prev) => !prev)}
+                aria-pressed={toulminMode}
+                title="Bật chế độ soi 5 thành phần lập luận Toulmin trên bài đọc"
+                className={`hidden md:inline-flex btn-secondary !min-h-9 !px-3 !py-1.5 !text-xs ${
+                  toulminMode ? '!border-[var(--color-primary)] !text-[var(--color-primary)]' : ''
+                }`}
+              >
+                <Highlighter className="h-3.5 w-3.5 text-[var(--color-primary)]" />
+                <span>{toulminMode ? 'Đang soi lập luận' : 'Soi lập luận'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleToggleCompleted}
+                aria-pressed={isCompleted}
+                aria-label={isCompleted ? 'Bỏ đánh dấu đã đọc xong' : 'Đánh dấu đã đọc xong'}
+                className={`hidden sm:inline-flex btn-secondary !min-h-9 !px-3 !py-1.5 !text-xs ${
+                  isCompleted ? '!border-[var(--color-primary)] !text-[var(--color-primary)]' : ''
+                }`}
+              >
+                <CheckCheck className="h-3.5 w-3.5" />
+                <span>{isCompleted ? 'Đã đọc xong' : 'Đánh dấu xong'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleToggleSave}
+                aria-label={isSaved ? 'Bỏ lưu tài liệu' : 'Lưu tài liệu vào tủ sách'}
+                className={`hidden sm:inline-flex btn-secondary !min-h-9 !px-3 !py-1.5 !text-xs ${
                   isSaved ? '!border-[var(--color-primary)] !text-[var(--color-primary)]' : ''
                 }`}
               >
                 <Bookmark className={`h-3.5 w-3.5 ${isSaved ? 'fill-current' : ''}`} />
-                <span className="hidden sm:inline">{isSaved ? 'Đã lưu' : 'Lưu'}</span>
+                <span>{isSaved ? 'Đã lưu' : 'Lưu'}</span>
               </button>
 
               <button
                 type="button"
                 onClick={handleOpenNotes}
-                className="btn-secondary !min-h-9 !px-3 !py-1.5 !text-xs"
+                aria-label="Mở bảng ghi chú bài đọc"
+                className="hidden sm:inline-flex btn-secondary !min-h-9 !px-3 !py-1.5 !text-xs"
               >
                 <NotebookPen className="h-3.5 w-3.5 text-[var(--color-primary)]" />
-                <span className="hidden sm:inline">
-                  Ghi chú{docNotes.length > 0 ? ` (${docNotes.length})` : ''}
+                <span>Ghi chú{docNotes.length > 0 ? ` (${docNotes.length})` : ''}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setReportModalOpen(true)}
+                title="Báo cáo lỗi nội dung"
+                aria-label="Báo cáo lỗi nội dung bài đọc"
+                className="hidden sm:inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition-colors cursor-pointer"
+              >
+                <Flag className="h-3.5 w-3.5" />
+              </button>
+
+              {/* Mobile (< 640px) compact font toggle + overflow "⋯" menu */}
+              <button
+                type="button"
+                onClick={() => {
+                  const idx = READING_FONT_SIZE_OPTIONS.findIndex((o) => o.key === fontSize);
+                  const next =
+                    READING_FONT_SIZE_OPTIONS[(idx + 1) % READING_FONT_SIZE_OPTIONS.length];
+                  updateLayoutPrefs({ readingFontSize: next.key });
+                }}
+                aria-label="Đổi cỡ chữ đọc bài"
+                className="inline-flex sm:hidden btn-secondary !min-h-9 !px-2.5 !py-1.5 !text-xs"
+              >
+                <Type className="h-3.5 w-3.5 text-[var(--color-primary)]" />
+                <span className="font-mono-num font-semibold">
+                  {READING_FONT_SIZE_OPTIONS.find((o) => o.key === fontSize)?.shortLabel ?? 'A'}
                 </span>
               </button>
+
+              <div className="relative sm:hidden">
+                <button
+                  type="button"
+                  onClick={() => setMobileMoreOpen((v) => !v)}
+                  aria-label="Thêm thao tác bài đọc"
+                  aria-expanded={mobileMoreOpen}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] cursor-pointer"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </button>
+                {mobileMoreOpen && (
+                  <div
+                    className="absolute right-0 mt-1.5 z-40 w-52 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-1.5 shadow-lg space-y-0.5"
+                    role="menu"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMobileMoreOpen(false);
+                        setToulminMode((v) => !v);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-muted)] cursor-pointer"
+                    >
+                      <Highlighter className="h-3.5 w-3.5 text-[var(--color-primary)]" />
+                      <span>{toulminMode ? 'Tắt soi lập luận' : 'Soi lập luận Toulmin'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMobileMoreOpen(false);
+                        handleToggleCompleted();
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-muted)] cursor-pointer"
+                    >
+                      <CheckCheck className={`h-3.5 w-3.5 ${isCompleted ? 'text-[var(--color-primary)]' : ''}`} />
+                      <span>{isCompleted ? 'Đã đọc xong' : 'Đánh dấu đã đọc xong'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMobileMoreOpen(false);
+                        handleToggleSave();
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-muted)] cursor-pointer"
+                    >
+                      <Bookmark className={`h-3.5 w-3.5 ${isSaved ? 'fill-current text-[var(--color-primary)]' : ''}`} />
+                      <span>{isSaved ? 'Bỏ lưu bài đọc' : 'Lưu bài đọc'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMobileMoreOpen(false);
+                        handleOpenNotes();
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-muted)] cursor-pointer"
+                    >
+                      <NotebookPen className="h-3.5 w-3.5 text-[var(--color-primary)]" />
+                      <span>Ghi chú ({docNotes.length})</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMobileMoreOpen(false);
+                        void handleShareLink();
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-muted)] cursor-pointer"
+                    >
+                      <Share2 className="h-3.5 w-3.5 text-[var(--color-primary)]" />
+                      <span>Sao chép liên kết</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMobileMoreOpen(false);
+                        setReportModalOpen(true);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-muted)] cursor-pointer"
+                    >
+                      <Flag className="h-3.5 w-3.5 text-[var(--color-primary)]" />
+                      <span>Báo cáo nội dung</span>
+                    </button>
+                  </div>
+                )}
+              </div>
 
               <button
                 type="button"
@@ -923,7 +1686,7 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
                     actionIntent: 'debate_claim',
                   })
                 }
-                className="btn-primary !min-h-9 !px-3.5 !py-1.5 !text-xs"
+                className="btn-primary !min-h-9 !px-3 !py-1.5 !text-xs whitespace-nowrap"
               >
                 <span className="hidden md:inline">Mở trong Thinking Lab</span>
                 <span className="md:hidden">Mở Lab</span>
@@ -948,46 +1711,31 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
         </button>
       )}
 
-      {/* Mobile / Tablet Quick Triggers for Bottom Sheet (TOC + Tools + Font Size) */}
+      {/* Mobile / Tablet Quick Triggers for Bottom Sheet (TOC + Tools) */}
       {!focusMode && (
-        <div className="flex lg:hidden items-center justify-center gap-2.5 px-4 pt-4">
+        <div className="flex lg:hidden items-center justify-center gap-2 px-4 pt-4">
           <button
             type="button"
             onClick={() => setMobileSheet('toc')}
-            className="btn-secondary flex-1 !min-h-11 !text-xs"
+            className="btn-secondary flex-1 !min-h-10 !text-xs"
           >
             <List className="h-4 w-4 text-[var(--color-primary)]" />
-            Mục lục
+            Mục lục ({tocItems.length})
           </button>
           <button
             type="button"
             onClick={() => setMobileSheet('tools')}
-            className="btn-secondary flex-1 !min-h-11 !text-xs"
+            className="btn-secondary flex-1 !min-h-10 !text-xs"
           >
             <NotebookPen className="h-4 w-4 text-[var(--color-primary)]" />
             Thuật ngữ & Ghi chú ({docNotes.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const idx = READING_FONT_SIZE_OPTIONS.findIndex((o) => o.key === fontSize);
-              const next = READING_FONT_SIZE_OPTIONS[(idx + 1) % READING_FONT_SIZE_OPTIONS.length];
-              updateLayoutPrefs({ readingFontSize: next.key });
-            }}
-            aria-label="Đổi cỡ chữ"
-            className="btn-secondary !min-h-11 !px-3 !text-xs shrink-0"
-          >
-            <Type className="h-4 w-4 text-[var(--color-primary)]" />
-            <span className="font-mono-num font-semibold">
-              {READING_FONT_SIZE_OPTIONS.find((o) => o.key === fontSize)?.shortLabel ?? 'A'}
-            </span>
           </button>
         </div>
       )}
 
       {/* Scroll Restoration Quiet Toast */}
       {restoredBanner && (
-        <div className="mx-auto max-w-[740px] px-5 pt-4">
+        <div className="mx-auto max-w-[740px] px-4 sm:px-5 pt-4">
           <div className="rounded-xl px-4 py-2.5 text-xs text-[var(--color-text)] border border-[var(--color-border)] bg-[var(--color-surface)] flex items-center justify-between gap-2">
             <span>{restoredBanner}</span>
             <button
@@ -1004,13 +1752,13 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
 
       {/* 3-Column Adaptive Reading Layout */}
       <div
-        className={`mx-auto w-full px-5 sm:px-8 py-8 lg:py-10 ${
+        className={`mx-auto w-full px-4 sm:px-8 py-6 sm:py-8 lg:py-10 ${
           focusMode
             ? 'max-w-[760px]'
             : 'max-w-[1400px] grid grid-cols-1 lg:grid-cols-12 gap-8 items-start'
         }`}
       >
-        {/* Column 1: Left Table of Contents */}
+        {/* Column 1: Left Table of Contents (100% auto-derived from heading blocks) */}
         {!focusMode && (
           <aside
             aria-label="Mục lục tài liệu"
@@ -1018,10 +1766,10 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
           >
             <div className="rounded-2xl p-4 surface-card">
               <div className="font-display text-sm font-semibold text-[var(--color-text)] mb-3">
-                Mục lục
+                Mục lục ({tocItems.length})
               </div>
               <nav className="space-y-1">
-                {doc.sections.map((section) => {
+                {tocItems.map((section) => {
                   const isActive = activeSectionId === section.id;
                   return (
                     <a
@@ -1042,7 +1790,7 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
 
               <div className="mt-5 pt-4 border-t border-[var(--color-border)] text-[11px] text-[var(--color-text-muted)] leading-relaxed">
                 Mẹo đọc sâu: Nhấn vào các thuật ngữ gạch chân chấm để xem định nghĩa, hoặc bôi đen
-                đoạn văn để mở 5 tác vụ Thinking Lab.
+                đoạn văn để tra nghĩa nhanh / mở Thinking Lab.
               </div>
             </div>
           </aside>
@@ -1056,7 +1804,7 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
           className={
             focusMode
               ? 'mx-auto w-full max-w-[68ch]'
-              : 'lg:col-span-9 xl:col-span-7 mx-auto w-full max-w-[68ch]'
+              : 'lg:col-span-9 xl:col-span-7 mx-auto w-full max-w-[68ch] min-w-0'
           }
         >
           {/* Editorial Article Header */}
@@ -1072,18 +1820,21 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
               <span className="text-[var(--color-text-muted)] font-medium">
                 {getDifficultyLabel(doc.difficulty)}
               </span>
-              {verified && (
-                <>
-                  <span className="text-[var(--color-text-muted)]" aria-hidden="true">·</span>
-                  <span className="inline-flex items-center gap-1 text-[var(--color-gold)]">
-                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
-                    Đã kiểm chứng nguồn
-                  </span>
-                </>
+              <span className="text-[var(--color-text-muted)]" aria-hidden="true">·</span>
+              {verified ? (
+                <span className="inline-flex items-center gap-1 text-[var(--color-gold)]">
+                  <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  Đã kiểm chứng nguồn
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[var(--color-text-muted)] font-normal">
+                  <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+                  Đang bổ sung nguồn tham khảo
+                </span>
               )}
             </div>
 
-            <h1 className="mt-2.5 font-display lib-scale-h1 font-semibold tracking-tight text-[var(--color-text)]">
+            <h1 className="mt-2.5 font-display lib-scale-h1 font-semibold tracking-tight text-[var(--color-text)] break-words">
               {doc.title}
             </h1>
 
@@ -1094,12 +1845,90 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
               <span aria-hidden="true">·</span>
               <span className="font-mono-num">{doc.publishedDate}</span>
               <span aria-hidden="true">·</span>
-              <span className="font-mono-num">{doc.readingMinutes} phút đọc</span>
+              <span className="font-mono-num">{readingMinutes} phút đọc</span>
+              {doc.wordCount ? (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono-num">{doc.wordCount} chữ</span>
+                </>
+              ) : null}
+              {doc.reviewNote && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>{doc.reviewNote}</span>
+                </>
+              )}
             </div>
 
             <p className="mt-4 font-reading lib-scale-lead text-[var(--color-text-muted)]">
               {doc.subtitle}
             </p>
+
+            {/* Quick Action Strip: Toulmin Highlighter Toggle */}
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2.5 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setToulminMode((prev) => !prev)}
+                  aria-pressed={toulminMode}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition-colors cursor-pointer ${
+                    toulminMode
+                      ? 'bg-[var(--color-primary)] text-[var(--color-on-primary)]'
+                      : 'border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)] hover:border-[var(--color-primary)]/50'
+                  }`}
+                >
+                  <Highlighter className="h-3.5 w-3.5" />
+                  {toulminMode ? 'Đang bật chế độ Soi lập luận' : 'Soi lập luận (Toulmin)'}
+                </button>
+                <span className="text-[var(--color-text-muted)]">
+                  Gắn nhãn Luận điểm · Căn cứ · Lí lẽ · Từ giới hạn · Phản bác
+                </span>
+              </div>
+              {toulminMode && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setToulminAssignments({});
+                    setToulminCompare(null);
+                  }}
+                  className="inline-flex items-center gap-1 font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text)] cursor-pointer"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Xóa nhãn
+                </button>
+              )}
+            </div>
+
+            {toulminMode && (
+              <div className="mt-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)]/80 p-3 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-semibold text-[var(--color-text-muted)] mr-1">
+                  Vai trò đang chọn:
+                </span>
+                {TOULMIN_ROLES.map((role) => {
+                  const active = activeToulminRole === role.key;
+                  return (
+                    <button
+                      key={role.key}
+                      type="button"
+                      onClick={() => setActiveToulminRole(role.key)}
+                      title={role.shortDesc}
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium border transition-colors cursor-pointer ${
+                        active
+                          ? 'bg-[var(--color-surface)] border-[var(--color-primary)] text-[var(--color-text)] font-semibold'
+                          : 'border-[var(--color-border)] bg-[var(--color-surface)]/50 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                      }`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="h-2.5 w-2.5 rounded-sm shrink-0"
+                        style={{ backgroundColor: role.colorVar }}
+                      />
+                      <span>{role.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             <div className="mt-6 overflow-hidden rounded-2xl border border-[var(--color-border)]">
               <HybridMediaCard
@@ -1114,6 +1943,166 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
           {/* Structured Reading Blocks */}
           <div className="mt-8">{doc.blocks.map((block, idx) => renderBlock(block, idx))}</div>
 
+          {/* Standalone Stance Box if document has no question block */}
+          {!doc.blocks.some((b) => b.type === 'question') && (
+            <section className="my-8 rounded-2xl p-5 sm:p-6 border border-[var(--color-border-strong)]/60 surface-subtle space-y-3">
+              <h2 className="font-display text-lg font-semibold text-[var(--color-text)]">
+                Viết lập trường của bạn
+              </h2>
+              {renderStancePracticeBox('standalone')}
+            </section>
+          )}
+
+          {/* Inline 3-Question Glossary Quick Quiz */}
+          {quickQuiz.length > 0 && (
+            <section
+              aria-labelledby="quick-quiz-heading"
+              className="my-8 rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5 sm:p-6 space-y-4"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[var(--color-border)]">
+                <div className="flex items-center gap-2">
+                  <HelpCircle className="h-4 w-4 text-[var(--color-primary)]" aria-hidden="true" />
+                  <h2
+                    id="quick-quiz-heading"
+                    className="font-display text-lg font-semibold text-[var(--color-text)]"
+                  >
+                    Kiểm tra nhanh thuật ngữ trong bài ({quickQuiz.length} câu)
+                  </h2>
+                </div>
+                {Object.keys(quizAnswers).length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setQuizAnswers({})}
+                    className="text-xs font-medium text-[var(--color-primary)] hover:underline cursor-pointer"
+                  >
+                    Làm lại
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                {quickQuiz.map((qItem, qIdx) => {
+                  const chosenIdx = quizAnswers[qIdx];
+                  const answered = chosenIdx !== undefined;
+                  const isCorrect = answered && chosenIdx === qItem.correctIndex;
+                  return (
+                    <div
+                      key={qItem.term}
+                      className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)]/50 p-4 space-y-2.5"
+                    >
+                      <p className="text-sm font-semibold text-[var(--color-text)]">
+                        <span className="font-mono-num text-[var(--color-primary)] mr-1.5">
+                          Câu {qIdx + 1}:
+                        </span>
+                        {qItem.question}
+                      </p>
+                      <div className="space-y-1.5">
+                        {qItem.options.map((optText, oIdx) => {
+                          const selected = chosenIdx === oIdx;
+                          const rightOpt = oIdx === qItem.correctIndex;
+                          let cls =
+                            'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] hover:border-[var(--color-primary)]/50';
+                          if (answered && rightOpt) {
+                            cls =
+                              'border-emerald-500/60 bg-emerald-500/10 text-[var(--color-text)] font-medium';
+                          } else if (answered && selected && !rightOpt) {
+                            cls =
+                              'border-[var(--color-danger)]/60 bg-[var(--color-danger)]/10 text-[var(--color-text)]';
+                          }
+                          return (
+                            <button
+                              key={oIdx}
+                              type="button"
+                              onClick={() =>
+                                setQuizAnswers((prev) => ({ ...prev, [qIdx]: oIdx }))
+                              }
+                              className={`w-full text-left rounded-lg border px-3.5 py-2 text-xs sm:text-[13px] leading-relaxed transition-colors cursor-pointer ${cls}`}
+                            >
+                              {optText}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {answered && (
+                        <p
+                          className={`text-xs font-medium ${
+                            isCorrect
+                              ? 'text-emerald-700 dark:text-emerald-400'
+                              : 'text-[var(--color-gold)]'
+                          }`}
+                        >
+                          {isCorrect
+                            ? 'Chính xác — bạn đã nắm đúng lõi khái niệm này.'
+                            : `Chưa đúng — định nghĩa chính xác là lựa chọn thứ ${qItem.correctIndex + 1}.`}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          {/* Mark Completed & Active Journey Step Navigation */}
+          <section className="my-8 rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-[var(--color-text)]">
+                  Hoàn tất lượt đọc này?
+                </p>
+                <p className="text-[11px] text-[var(--color-text-muted)]">
+                  Lưu tiến độ vào Tổng quan thư phòng để theo dõi lộ trình của bạn.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleToggleCompleted}
+                aria-pressed={isCompleted}
+                className={
+                  isCompleted
+                    ? 'btn-primary !min-h-10 !px-4 !text-xs'
+                    : 'btn-secondary !min-h-10 !px-4 !text-xs'
+                }
+              >
+                <CheckCheck className="h-4 w-4" />
+                {isCompleted ? 'Đã đọc xong' : 'Đánh dấu đã đọc xong'}
+              </button>
+            </div>
+
+            {activeJourney && journeyPosition && (
+              <div className="pt-4 border-t border-[var(--color-border)] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div>
+                  <span className="font-semibold text-[var(--color-primary)]">
+                    Hành trình: {activeJourney.title}
+                  </span>
+                  <span className="ml-2 font-mono-num text-[var(--color-text-muted)]">
+                    (Bài {journeyPosition.index + 1}/{journeyPosition.total})
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {journeyPosition.prevDoc && (
+                    <Link
+                      to={`/library/${journeyPosition.prevDoc.id}`}
+                      className="btn-secondary !min-h-8 !px-3 !text-xs"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                      Bài trước
+                    </Link>
+                  )}
+                  {journeyPosition.nextDoc && (
+                    <Link
+                      to={`/library/${journeyPosition.nextDoc.id}`}
+                      className="btn-primary !min-h-8 !px-3 !text-xs"
+                    >
+                      Bài tiếp
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </Link>
+                  )}
+                </div>
+              </div>
+            )}
+          </section>
+
           {/* Verified References Section */}
           {doc.references && doc.references.length > 0 && (
             <section
@@ -1127,10 +2116,14 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
                 >
                   Nguồn tham khảo & Tác phẩm gốc
                 </h2>
-                {verified && (
+                {verified ? (
                   <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-gold)]">
                     <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
-                    Đã đối chiếu
+                    Đã đối chiếu ({doc.references.filter((r) => r.verified).length} nguồn)
+                  </span>
+                ) : (
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    Đang bổ sung thêm nguồn đối chiếu
                   </span>
                 )}
               </div>
@@ -1162,7 +2155,7 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
           <ChapterDividerSvg />
 
           {/* End-of-article 5-Action Bridge to Thinking Lab */}
-          <section className="rounded-2xl p-6 sm:p-7 surface-card space-y-5">
+          <section className="rounded-2xl p-5 sm:p-7 surface-card space-y-5">
             <div>
               <div className="inline-flex items-center gap-2 text-xs font-semibold text-[var(--color-primary)]">
                 <BookOpen className="h-4 w-4" aria-hidden="true" />
@@ -1187,6 +2180,12 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
               }
             />
           </section>
+
+          {/* Rating, Comments & Content Reporting Section */}
+          <DocumentFeedbackSection
+            documentId={doc.id}
+            onOpenReport={() => setReportModalOpen(true)}
+          />
         </article>
 
         {/* Column 3: Right Concepts, Related Docs & Margin Notes */}
@@ -1274,7 +2273,7 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
               </div>
               {mobileSheet === 'toc' ? (
                 <nav className="space-y-1.5">
-                  {doc.sections.map((section) => (
+                  {tocItems.map((section) => (
                     <a
                       key={section.id}
                       href={`#${section.id}`}
@@ -1301,6 +2300,14 @@ export function DocumentDetailPage({ documentId }: { documentId: string }) {
         activeDocument={doc}
         allPublishedDocuments={publishedDocuments}
       />
-    </WorkspaceShell>
+
+      {/* Content Report Modal */}
+      <DocumentReportModal
+        open={reportModalOpen}
+        documentId={doc.id}
+        documentTitle={doc.title}
+        onClose={() => setReportModalOpen(false)}
+      />
+    </>
   );
 }

@@ -1,10 +1,24 @@
-const GEMINI_MODEL = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
-const GEMINI_BASE_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
+const ALLOWED_GEMINI_MODELS = new Set([
+  'gemini-2.5-flash',
+  'gemini-2.5-pro',
+  'gemini-2.0-flash',
+]);
 const REQUEST_TIMEOUT_MS = 28_000;
 const MAX_TOTAL_CHARS = 75_000;
 const MAX_TURNS = 50;
 const MAX_ATTACHMENTS = 3;
-const MAX_INLINE_BASE64_CHARS = 5_600_000; // ~4 MB decoded binary payload
+const MAX_INLINE_BASE64_CHARS = 7_000_000; // ~5 MB decoded binary payload
+
+function resolveGeminiModel(requested) {
+  if (typeof requested === 'string') {
+    const clean = requested.trim();
+    if (ALLOWED_GEMINI_MODELS.has(clean)) {
+      return clean;
+    }
+  }
+  return DEFAULT_GEMINI_MODEL;
+}
 
 const ALLOWED_INLINE_MIME_TYPES = new Set([
   'image/png',
@@ -85,7 +99,7 @@ function normalizeParts(rawParts, state) {
       if (!isValidBase64(data)) {
         return {
           ok: false,
-          error: 'Dữ liệu tệp đính kèm không hợp lệ hoặc vượt quá giới hạn 4 MB mỗi tệp.',
+          error: 'Dữ liệu tệp đính kèm không hợp lệ hoặc vượt quá giới hạn 5 MB mỗi tệp.',
         };
       }
       state.inlineCount += 1;
@@ -157,23 +171,29 @@ function buildGeminiPayload(body) {
       for (const att of body.attachments) {
         if (!att || typeof att !== 'object') continue;
         const safeName = typeof att.name === 'string' ? att.name.trim().slice(0, 140) : 'tep-dinh-kem';
+        const inlinePayload =
+          typeof att.data === 'string' && att.data.trim().length > 0
+            ? att.data
+            : typeof att.base64Data === 'string' && att.base64Data.trim().length > 0
+              ? att.base64Data
+              : '';
         if (typeof att.textContent === 'string' && att.textContent.trim().length > 0) {
           latestUserParts.push({
             text: `[Nội dung tệp đính kèm "${safeName}"]\n${att.textContent.trim().slice(0, 15_000)}`,
           });
-        } else if (typeof att.data === 'string' && att.data.trim().length > 0) {
+        } else if (inlinePayload.length > 0) {
           const mimeType = typeof att.mimeType === 'string' ? att.mimeType.trim().toLowerCase() : '';
-          const cleanData = att.data.replace(/\s+/g, '');
+          const cleanData = inlinePayload.replace(/\s+/g, '');
           if (!ALLOWED_INLINE_MIME_TYPES.has(mimeType)) {
             return {
               ok: false,
-              error: `Định dạng tệp "${safeName}" chưa được hỗ trợ. Hỗ trợ: TXT, MD, CSV, JSON, PNG, JPG, WEBP, PDF.`,
+              error: `Định dạng tệp "${safeName}" chưa được hỗ trợ. Hỗ trợ: TXT, MD, DOCX, CSV, JSON, PNG, JPG, WEBP, PDF.`,
             };
           }
           if (!isValidBase64(cleanData)) {
             return {
               ok: false,
-              error: `Tệp "${safeName}" vượt quá giới hạn 4 MB hoặc dữ liệu không hợp lệ.`,
+              error: `Tệp "${safeName}" vượt quá giới hạn 5 MB hoặc dữ liệu không hợp lệ.`,
             };
           }
           state.inlineCount += 1;
@@ -350,7 +370,8 @@ export default async function handler(req, res) {
   }
 
   const apiKey = rawApiKey.trim();
-  const endpoint = `${GEMINI_BASE_URL}?key=${encodeURIComponent(apiKey)}`;
+  const activeModel = resolveGeminiModel(parsedBody.data.model);
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(activeModel)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -421,7 +442,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       text,
-      model: GEMINI_MODEL,
+      model: activeModel,
       finishReason,
       candidates,
       usageMetadata: upstreamJson?.usageMetadata ?? null,

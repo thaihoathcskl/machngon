@@ -1,11 +1,17 @@
 import { DEFAULT_THEME_CONFIG, SavedThemeConfig } from './palettes';
 import {
+  AiFeedbackFlag,
+  AiModelId,
+  DocumentComment,
+  DocumentReportItem,
+  LabDifficultyLevel,
   LabHandoffPayload,
   LabSession,
   LibraryCategoryMeta,
   LibraryCollection,
   LibraryDocument,
   ReadingNote,
+  RubricScoreEntry,
   UserProfile,
 } from './types';
 
@@ -22,6 +28,19 @@ const KEYS = {
   LAB_DRAFT_PREFIX: 'machngon_lab_draft_',
   LAB_HANDOFF: 'machngon_lab_handoff_v1',
   READ_POS_PREFIX: 'machngon_read_pos_',
+  LAB_DIFFICULTY: 'machngon_lab_difficulty_v1',
+  PREFERRED_AI_MODEL: 'machngon_ai_model_v1',
+  DOC_COMMENTS: 'machngon_doc_comments_v1',
+  DOC_REPORTS: 'machngon_doc_reports_v1',
+  AI_FEEDBACK_FLAGS: 'machngon_ai_flags_v1',
+  COMPLETED_DOCS: 'machngon_completed_docs_v1',
+  OPENED_DOCS: 'machngon_opened_docs_v1',
+  ACTIVE_JOURNEY: 'machngon_active_journey_v1',
+  RUBRIC_SCORES: 'machngon_rubric_scores_v1',
+  MY_CONCEPT_DEFS: 'machngon_my_defs_v1',
+  DOC_STANCES: 'machngon_doc_stance_v1',
+  ANNOTATE_DRAFT: 'machngon_annotate_draft_v1',
+  GRADE_DRAFT: 'machngon_grade_draft_v1',
 };
 
 export interface ReadingScrollState {
@@ -139,8 +158,8 @@ export function saveUserProfile(profile: UserProfile): void {
 
 export function loadSavedDocIds(): string[] {
   return safeGetLocal<string[]>(KEYS.SAVED_DOCS, [
-    'triet-hoc-hien-sinh-con-nguoi-va-su-tu-do',
-    'ngon-ngu-va-tu-duy-moi-lien-he-bien-chung',
+    'triet-hoc-hien-sinh',
+    'ngon-ngu-va-tu-duy',
   ]);
 }
 
@@ -152,8 +171,8 @@ export function loadReadingNotes(): ReadingNote[] {
   return safeGetLocal<ReadingNote[]>(KEYS.NOTES, [
     {
       id: 'note-seed-1',
-      documentId: 'triet-hoc-hien-sinh-con-nguoi-va-su-tu-do',
-      blockId: 'block-hs-2',
+      documentId: 'triet-hoc-hien-sinh',
+      blockId: 'triet-hoc-hien-sinh-b-1',
       content:
         'Cần phân biệt rõ giữa tự do lựa chọn thái độ ứng xử và tự do thoát khỏi điều kiện vật chất.',
       createdAt: '2026-11-18T09:30:00.000Z',
@@ -171,7 +190,7 @@ export function loadLabSessions(): LabSession[] {
       id: 'session-seed-existential',
       title: 'Ranh giới giữa tự do hiện sinh và điều kiện xã hội',
       labType: 'debate',
-      resourceContextId: 'triet-hoc-hien-sinh-con-nguoi-va-su-tu-do',
+      resourceContextId: 'triet-hoc-hien-sinh',
       messages: [
         {
           id: 'msg-seed-u1',
@@ -415,4 +434,209 @@ export function getAllReadingProgress(): Record<string, ReadingScrollState> {
   }
   return result;
 }
+
+export function loadLabDifficulty(): LabDifficultyLevel {
+  const stored = safeGetLocal<string>(KEYS.LAB_DIFFICULTY, 'intermediate');
+  if (stored === 'basic' || stored === 'intermediate' || stored === 'advanced') {
+    return stored;
+  }
+  return 'intermediate';
+}
+
+export function saveLabDifficulty(level: LabDifficultyLevel): void {
+  safeSetLocal(KEYS.LAB_DIFFICULTY, level);
+}
+
+export function loadPreferredAiModel(): AiModelId {
+  const stored = safeGetLocal<string>(KEYS.PREFERRED_AI_MODEL, 'gemini-2.5-flash');
+  if (
+    stored === 'gemini-2.5-flash' ||
+    stored === 'gemini-2.5-pro' ||
+    stored === 'gemini-2.0-flash'
+  ) {
+    return stored;
+  }
+  return 'gemini-2.5-flash';
+}
+
+export function savePreferredAiModel(model: AiModelId): void {
+  safeSetLocal(KEYS.PREFERRED_AI_MODEL, model);
+}
+
+export function loadDocumentComments(documentId?: string): DocumentComment[] {
+  const all = safeGetLocal<DocumentComment[]>(KEYS.DOC_COMMENTS, []);
+  if (!documentId) return all;
+  return all.filter((c) => c.documentId === documentId);
+}
+
+export function addDocumentComment(comment: DocumentComment): DocumentComment[] {
+  const all = safeGetLocal<DocumentComment[]>(KEYS.DOC_COMMENTS, []);
+  const next = [comment, ...all].slice(0, 300);
+  safeSetLocal(KEYS.DOC_COMMENTS, next);
+  return next;
+}
+
+export function loadDocumentReports(): DocumentReportItem[] {
+  return safeGetLocal<DocumentReportItem[]>(KEYS.DOC_REPORTS, []);
+}
+
+export function addDocumentReport(report: DocumentReportItem): DocumentReportItem[] {
+  const all = loadDocumentReports();
+  const next = [report, ...all].slice(0, 200);
+  safeSetLocal(KEYS.DOC_REPORTS, next);
+  return next;
+}
+
+export function loadAiFeedbackFlags(): AiFeedbackFlag[] {
+  return safeGetLocal<AiFeedbackFlag[]>(KEYS.AI_FEEDBACK_FLAGS, []);
+}
+
+export function addAiFeedbackFlag(flag: AiFeedbackFlag): AiFeedbackFlag[] {
+  const all = loadAiFeedbackFlags();
+  const next = [flag, ...all].slice(0, 200);
+  safeSetLocal(KEYS.AI_FEEDBACK_FLAGS, next);
+  return next;
+}
+
+export function loadCompletedDocIds(): string[] {
+  return safeGetLocal<string[]>(KEYS.COMPLETED_DOCS, []);
+}
+
+export function saveCompletedDocIds(ids: string[]): void {
+  safeSetLocal(KEYS.COMPLETED_DOCS, ids);
+}
+
+export function loadOpenedDocIds(): string[] {
+  return safeGetLocal<string[]>(KEYS.OPENED_DOCS, []);
+}
+
+export function saveOpenedDocIds(ids: string[]): void {
+  safeSetLocal(KEYS.OPENED_DOCS, ids);
+}
+
+export function loadActiveJourneyId(): string {
+  return safeGetLocal<string>(KEYS.ACTIVE_JOURNEY, '');
+}
+
+export function saveActiveJourneyId(journeyId: string): void {
+  safeSetLocal(KEYS.ACTIVE_JOURNEY, journeyId);
+}
+
+export function loadRubricScores(): RubricScoreEntry[] {
+  return safeGetLocal<RubricScoreEntry[]>(KEYS.RUBRIC_SCORES, []);
+}
+
+export function saveRubricScores(entries: RubricScoreEntry[]): void {
+  safeSetLocal(KEYS.RUBRIC_SCORES, entries.slice(0, 120));
+}
+
+export function loadMyConceptDefs(): Record<string, string> {
+  return safeGetLocal<Record<string, string>>(KEYS.MY_CONCEPT_DEFS, {});
+}
+
+export function saveMyConceptDef(term: string, definition: string): Record<string, string> {
+  const current = loadMyConceptDefs();
+  const next = { ...current };
+  if (!definition.trim()) {
+    delete next[term];
+  } else {
+    next[term] = definition.trim();
+  }
+  safeSetLocal(KEYS.MY_CONCEPT_DEFS, next);
+  return next;
+}
+
+export function loadDocStances(): Record<string, string> {
+  return safeGetLocal<Record<string, string>>(KEYS.DOC_STANCES, {});
+}
+
+export function saveDocStance(docId: string, text: string): Record<string, string> {
+  const current = loadDocStances();
+  const next = { ...current };
+  if (!text.trim()) {
+    delete next[docId];
+  } else {
+    next[docId] = text;
+  }
+  safeSetLocal(KEYS.DOC_STANCES, next);
+  return next;
+}
+
+export function loadLabToolDraft(tool: 'annotate' | 'grade'): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const key = tool === 'annotate' ? KEYS.ANNOTATE_DRAFT : KEYS.GRADE_DRAFT;
+    return window.localStorage.getItem(key) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function saveLabToolDraft(tool: 'annotate' | 'grade', text: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const key = tool === 'annotate' ? KEYS.ANNOTATE_DRAFT : KEYS.GRADE_DRAFT;
+    if (!text) {
+      window.localStorage.removeItem(key);
+    } else {
+      window.localStorage.setItem(key, text);
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+export function exportAllLocalDataJson(): string {
+  const payload = {
+    app: 'Mạch Ngôn',
+    exportedAt: new Date().toISOString(),
+    profile: loadUserProfile(),
+    savedDocIds: loadSavedDocIds(),
+    completedDocIds: loadCompletedDocIds(),
+    openedDocIds: loadOpenedDocIds(),
+    activeJourneyId: loadActiveJourneyId(),
+    rubricScores: loadRubricScores(),
+    myConceptDefs: loadMyConceptDefs(),
+    docStances: loadDocStances(),
+    readingNotes: loadReadingNotes(),
+    labSessions: loadLabSessions(),
+    readingProgress: getAllReadingProgress(),
+    documentComments: loadDocumentComments(),
+    documentReports: loadDocumentReports(),
+    aiFeedbackFlags: loadAiFeedbackFlags(),
+    preferences: {
+      theme: loadThemeConfig(),
+      layout: loadLayoutPrefs(),
+      labDifficulty: loadLabDifficulty(),
+      preferredAiModel: loadPreferredAiModel(),
+    },
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+export function clearAllLocalData(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const localKeysToRemove: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const k = window.localStorage.key(i);
+      if (k && k.startsWith('machngon_')) {
+        localKeysToRemove.push(k);
+      }
+    }
+    localKeysToRemove.forEach((k) => window.localStorage.removeItem(k));
+
+    const sessionKeysToRemove: string[] = [];
+    for (let i = 0; i < window.sessionStorage.length; i += 1) {
+      const k = window.sessionStorage.key(i);
+      if (k && k.startsWith('machngon_')) {
+        sessionKeysToRemove.push(k);
+      }
+    }
+    sessionKeysToRemove.forEach((k) => window.sessionStorage.removeItem(k));
+  } catch {
+    // Ignore storage clear errors
+  }
+}
+
 

@@ -68,9 +68,15 @@ export function buildLabIntentPrompt(handoff: LabHandoffPayload): string {
   const sectionCtx = handoff.sectionTitle ? ` (mục "${handoff.sectionTitle}")` : '';
   const sourceHeader = `Từ tài liệu "${handoff.resourceTitle}"${sectionCtx}:\n"${snippet}"\n\n`;
 
+  if (handoff.question?.trim()) {
+    return `Từ tài liệu "${handoff.resourceTitle}"${sectionCtx}, tôi muốn suy ngẫm và trả lời câu hỏi gợi mở sau:\n"${handoff.question.trim()}"\n\nQuan điểm ban đầu của tôi là: `;
+  }
+
   switch (handoff.actionIntent) {
     case 'explain':
-      return `${sourceHeader}Hãy giúp tôi giải thích đoạn trích này một cách dễ hiểu, chỉ rõ ý cốt lõi và kết nối với một tình huống thực tế gần gũi với học sinh.`;
+      return handoff.labType === 'read'
+        ? `${sourceHeader}Hãy hướng dẫn tôi đọc chậm ngữ liệu văn học này: bắt đầu từ thể loại, ấn tượng ban đầu và những chi tiết ngôn từ đáng chú ý nhất.`
+        : `${sourceHeader}Hãy giúp tôi giải thích đoạn trích này một cách dễ hiểu, chỉ rõ ý cốt lõi và kết nối với một tình huống thực tế gần gũi với học sinh.`;
     case 'analyze_concept':
       return `${sourceHeader}Hãy phân tích khái niệm trung tâm trong đoạn trích này: bản chất, phạm vi áp dụng, và phân biệt với những khái niệm dễ nhầm lẫn.`;
     case 'examples_counterexamples':
@@ -80,6 +86,9 @@ export function buildLabIntentPrompt(handoff: LabHandoffPayload): string {
     case 'debate_claim':
       return `${sourceHeader}Tôi muốn đưa nhận định này vào bàn tranh biện: hãy giúp tôi bóc tách giả định ngầm, trình bày phiên bản mạnh nhất của lập luận đối lập và thử thách tính vững chắc của nó.`;
     default:
+      if (handoff.labType === 'read') {
+        return `${sourceHeader}Hãy hướng dẫn tôi đọc sâu tác phẩm / ngữ liệu văn học này theo từng chi tiết nghệ thuật: `;
+      }
       if (handoff.labType === 'debate') {
         return `${sourceHeader}Tôi muốn phản biện và kiểm thử các giả định ẩn sau nhận định này: `;
       }

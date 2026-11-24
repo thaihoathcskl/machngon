@@ -58,6 +58,7 @@ export type VoiceDebatePhase =
   | 'cooldown';
 
 const POST_TTS_COOLDOWN_MS = 750;
+const SILENCE_AUTO_SUBMIT_MS = 1800;
 
 /**
  * Strips Markdown formatting tokens (*, **, #, backticks, bullets, links)
@@ -162,6 +163,8 @@ export interface UseVoiceDebateReturn {
   startListening: (options?: { clearBeforeStart?: boolean; forceInterruptTts?: boolean }) => void;
   stopListening: () => void;
   toggleListening: () => void;
+  /** Interrupt AI speech immediately and open microphone for user barge-in */
+  bargeInAndListen: () => void;
   speakText: (text: string, messageId?: string, onComplete?: () => void) => void;
   stopSpeaking: () => void;
 }
@@ -192,6 +195,7 @@ export function useVoiceDebate({
   const lastSpokenTextRef = useRef('');
   const lastSpokenEndedAtRef = useRef(0);
   const cooldownTimerRef = useRef<number | null>(null);
+  const silenceTimerRef = useRef<number | null>(null);
   const onTranscriptChangeRef = useRef(onTranscriptChange);
   const onAutoSubmitRef = useRef(onAutoSubmit);
   const onNotifyRef = useRef(onNotify);
@@ -240,6 +244,13 @@ export function useVoiceDebate({
     };
   }, [ttsSupported]);
 
+  const clearSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current !== null) {
+      window.clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+  }, []);
+
   const clearCooldown = useCallback(() => {
     if (cooldownTimerRef.current !== null) {
       window.clearTimeout(cooldownTimerRef.current);
@@ -252,6 +263,7 @@ export function useVoiceDebate({
   useEffect(() => {
     return () => {
       clearCooldown();
+      clearSilenceTimer();
       try {
         recognitionRef.current?.abort();
       } catch {
@@ -268,6 +280,7 @@ export function useVoiceDebate({
   }, [clearCooldown]);
 
   const abortMicHard = useCallback(() => {
+    clearSilenceTimer();
     manualStopRef.current = true;
     try {
       recognitionRef.current?.abort();
@@ -277,7 +290,7 @@ export function useVoiceDebate({
     recognitionRef.current = null;
     setIsListening(false);
     setInterimTranscript('');
-  }, []);
+  }, [clearSilenceTimer]);
 
   const stopSpeaking = useCallback(() => {
     clearCooldown();
@@ -294,6 +307,7 @@ export function useVoiceDebate({
   }, [clearCooldown]);
 
   const stopListening = useCallback(() => {
+    clearSilenceTimer();
     manualStopRef.current = true;
     try {
       recognitionRef.current?.stop();
@@ -302,7 +316,7 @@ export function useVoiceDebate({
     }
     setIsListening(false);
     setInterimTranscript('');
-  }, []);
+  }, [clearSilenceTimer]);
 
   const startListening = useCallback(
     (options?: { clearBeforeStart?: boolean; forceInterruptTts?: boolean }) => {
@@ -393,6 +407,19 @@ export function useVoiceDebate({
         setInterimTranscript(interimChunk.trim());
         latestComposedRef.current = combined;
         onTranscriptChangeRef.current(combined);
+
+        // In hands-free mode, auto-finalize after 1.8s of silence once speech is captured
+        clearSilenceTimer();
+        if (handsFreeRef.current && spoken.trim().length > 0) {
+          silenceTimerRef.current = window.setTimeout(() => {
+            silenceTimerRef.current = null;
+            try {
+              recognition.stop();
+            } catch {
+              // Ignore stop errors
+            }
+          }, SILENCE_AUTO_SUBMIT_MS);
+        }
       };
 
       recognition.onerror = (event) => {
@@ -418,6 +445,7 @@ export function useVoiceDebate({
       };
 
       recognition.onend = () => {
+        clearSilenceTimer();
         setIsListening(false);
         setInterimTranscript('');
 
@@ -458,7 +486,7 @@ export function useVoiceDebate({
         );
       }
     },
-    [abortMicHard, stopSpeaking, sttSupported]
+    [abortMicHard, clearSilenceTimer, stopSpeaking, sttSupported]
   );
 
   const toggleListening = useCallback(() => {
@@ -468,6 +496,10 @@ export function useVoiceDebate({
       startListening({ forceInterruptTts: true });
     }
   }, [isListening, startListening, stopListening]);
+
+  const bargeInAndListen = useCallback(() => {
+    startListening({ forceInterruptTts: true, clearBeforeStart: true });
+  }, [startListening]);
 
   const speakText = useCallback(
     (text: string, messageId?: string, onComplete?: () => void) => {
@@ -598,6 +630,7 @@ export function useVoiceDebate({
     startListening,
     stopListening,
     toggleListening,
+    bargeInAndListen,
     speakText,
     stopSpeaking,
   };

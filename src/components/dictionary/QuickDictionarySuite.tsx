@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BookOpen,
+  ExternalLink,
   GripHorizontal,
   Loader2,
   Search,
@@ -14,15 +15,19 @@ import {
   explainTermQuickly,
   getSuggestedDictionaryTerms,
 } from '../../lib/dictionary';
+import { Link } from '../../lib/router';
 
 interface QuickExplainEventDetail {
   term: string;
   contextSnippet?: string;
+  articleTitle?: string;
+  forceAI?: boolean;
 }
 
 interface SelectionBubbleState {
   text: string;
   contextSnippet: string;
+  articleTitle?: string;
   x: number;
   y: number;
 }
@@ -30,6 +35,8 @@ interface SelectionBubbleState {
 interface DictionaryHistoryItem {
   id: string;
   query: string;
+  contextSnippet?: string;
+  articleTitle?: string;
   entry?: DictionaryEntry | null;
   errorMessage?: string;
   quotaExhausted?: boolean;
@@ -38,10 +45,15 @@ interface DictionaryHistoryItem {
 
 export const QUICK_EXPLAIN_EVENT = 'machngon:quick-explain';
 
-export function dispatchQuickExplain(term: string, contextSnippet?: string) {
+export function dispatchQuickExplain(
+  term: string,
+  contextSnippet?: string,
+  articleTitle?: string,
+  forceAI?: boolean
+) {
   window.dispatchEvent(
     new CustomEvent<QuickExplainEventDetail>(QUICK_EXPLAIN_EVENT, {
-      detail: { term, contextSnippet },
+      detail: { term, contextSnippet, articleTitle, forceAI },
     })
   );
 }
@@ -78,7 +90,10 @@ export function QuickDictionarySuite() {
   const suggestedTerms = getSuggestedDictionaryTerms().slice(0, 4);
 
   const runLookup = useCallback(
-    async (rawTerm: string, options?: { contextSnippet?: string; forceAI?: boolean }) => {
+    async (
+      rawTerm: string,
+      options?: { contextSnippet?: string; articleTitle?: string; forceAI?: boolean }
+    ) => {
       const cleanTerm = rawTerm.replace(/\s+/g, ' ').trim();
       if (cleanTerm.length < 2) return;
 
@@ -87,11 +102,18 @@ export function QuickDictionarySuite() {
       setSelectionBubble(null);
       setHistory((prev) => [
         ...prev.slice(-11),
-        { id: itemId, query: cleanTerm, loading: true },
+        {
+          id: itemId,
+          query: cleanTerm,
+          contextSnippet: options?.contextSnippet,
+          articleTitle: options?.articleTitle,
+          loading: true,
+        },
       ]);
 
       const result = await explainTermQuickly(cleanTerm, {
         contextSnippet: options?.contextSnippet,
+        articleTitle: options?.articleTitle,
         forceAI: options?.forceAI,
       });
 
@@ -116,13 +138,15 @@ export function QuickDictionarySuite() {
     []
   );
 
-  // Listen for programmatic quick-explain requests (e.g., from DocumentDetailPage)
+  // Listen for programmatic quick-explain requests (e.g., from DocumentDetailPage / ConceptTooltip)
   useEffect(() => {
     const onCustomExplain = (event: Event) => {
       const custom = event as CustomEvent<QuickExplainEventDetail>;
       if (custom.detail?.term) {
         void runLookup(custom.detail.term, {
           contextSnippet: custom.detail.contextSnippet,
+          articleTitle: custom.detail.articleTitle,
+          forceAI: custom.detail.forceAI,
         });
       }
     };
@@ -174,13 +198,18 @@ export function QuickDictionarySuite() {
             return;
           }
 
-          const containerText = anchorEl?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+          const blockHost = anchorEl?.closest('p, li, blockquote, section, article') ?? anchorEl;
+          const containerText = blockHost?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+          const articleHost = anchorEl?.closest('[data-article-selection-host="true"]');
+          const articleTitle =
+            articleHost?.querySelector('h1')?.textContent?.replace(/\s+/g, ' ').trim() || undefined;
           const x = Math.max(90, Math.min(window.innerWidth - 90, rect.left + rect.width / 2));
           const y = Math.max(58, rect.top - 10);
 
           setSelectionBubble({
             text,
-            contextSnippet: containerText.slice(0, 220),
+            contextSnippet: containerText.slice(0, 320),
+            articleTitle,
             x,
             y,
           });
@@ -307,14 +336,14 @@ export function QuickDictionarySuite() {
                 e.preventDefault();
               }}
               onClick={() => {
-                const { text, contextSnippet } = selectionBubble;
+                const { text, contextSnippet, articleTitle } = selectionBubble;
                 window.getSelection()?.removeAllRanges();
-                void runLookup(text, { contextSnippet });
+                void runLookup(text, { contextSnippet, articleTitle });
               }}
               className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--color-primary)] bg-[var(--color-surface)] px-3 py-1.5 text-xs font-semibold text-[var(--color-primary)] shadow-md hover:bg-[var(--color-primary)] hover:text-[var(--color-on-primary)] transition-colors whitespace-nowrap cursor-pointer"
             >
               <Sparkles className="h-3.5 w-3.5 shrink-0" />
-              <span>Giải thích nhanh</span>
+              <span>Giải thích nghĩa</span>
             </button>
           </motion.div>
         )}
@@ -457,7 +486,7 @@ export function QuickDictionarySuite() {
                           <span>Đang tra nghĩa…</span>
                         </div>
                       ) : item.entry ? (
-                        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)]/65 p-3 space-y-1.5">
+                        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)]/65 p-3 space-y-2">
                           <div className="flex items-center justify-between gap-2">
                             <span className="font-display text-[13px] font-bold text-[var(--color-text)]">
                               {item.entry.term}
@@ -468,30 +497,106 @@ export function QuickDictionarySuite() {
                               ) : null}
                             </span>
                             <span className="text-[10px] font-medium text-[var(--color-primary)] shrink-0">
-                              {item.entry.source === 'local-glossary' ? 'Kho từ điển' : 'AI'}
+                              {item.entry.source === 'local-glossary' ? 'Kho từ điển' : 'AI Library'}
                             </span>
                           </div>
                           <p className="font-reading text-[12.5px] leading-relaxed text-[var(--color-text)]">
+                            <strong className="font-sans text-[11px] text-[var(--color-primary)]">
+                              1. Định nghĩa cốt lõi:{' '}
+                            </strong>
                             {item.entry.definition}
                           </p>
+                          {item.entry.contextMeaning && (
+                            <p className="text-[11.5px] leading-relaxed text-[var(--color-text)] pt-1 border-t border-[var(--color-border)]/70">
+                              <strong className="text-[var(--color-gold)]">
+                                2. Trong ngữ cảnh câu văn:{' '}
+                              </strong>
+                              {item.entry.contextMeaning}
+                            </p>
+                          )}
                           {item.entry.example && (
                             <p className="text-[11.5px] leading-relaxed text-[var(--color-text-muted)] pt-1 border-t border-[var(--color-border)]/70">
-                              <strong className="text-[var(--color-text)]">Ví dụ:</strong>{' '}
+                              <strong className="text-[var(--color-text)]">
+                                {item.entry.contextMeaning ? '3. Ví dụ:' : 'Ví dụ:'}
+                              </strong>{' '}
                               {item.entry.example}
                             </p>
+                          )}
+                          {item.entry.sources && item.entry.sources.length > 0 && (
+                            <div
+                              data-testid="dictionary-sources-list"
+                              className="pt-1.5 border-t border-[var(--color-border)]/70 space-y-1"
+                            >
+                              <div className="text-[10.5px] font-semibold text-[var(--color-text-muted)]">
+                                Nguồn tham khảo:
+                              </div>
+                              <ul className="space-y-1">
+                                {item.entry.sources
+                                  .filter((src) => {
+                                    try {
+                                      const parsed = new URL(src.uri || src.url || '');
+                                      return (
+                                        parsed.protocol === 'http:' || parsed.protocol === 'https:'
+                                      );
+                                    } catch {
+                                      return false;
+                                    }
+                                  })
+                                  .map((src, idx) => (
+                                    <li key={src.uri || src.url || idx} className="min-w-0">
+                                      <a
+                                        href={src.uri || src.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-1 max-w-full text-[11px] font-medium text-[var(--color-primary)] hover:underline"
+                                      >
+                                        <span className="truncate">{src.title}</span>
+                                        <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                                      </a>
+                                    </li>
+                                  ))}
+                              </ul>
+                            </div>
                           )}
                           {item.entry.source === 'local-glossary' && (
                             <div className="pt-1">
                               <button
                                 type="button"
-                                onClick={() => void runLookup(item.query, { forceAI: true })}
+                                onClick={() =>
+                                  void runLookup(item.query, {
+                                    contextSnippet: item.contextSnippet,
+                                    articleTitle: item.articleTitle,
+                                    forceAI: true,
+                                  })
+                                }
                                 className="text-[11px] font-medium text-[var(--color-primary)] hover:underline cursor-pointer"
                               >
-                                Giải thích sâu hơn bằng AI
+                                Giải thích sâu hơn theo ngữ cảnh bằng AI
                               </button>
                             </div>
                           )}
-                          {item.errorMessage && (
+                          {item.quotaExhausted && (
+                            <div
+                              className="rounded-lg border px-2.5 py-1.5 text-[11px] leading-relaxed text-[var(--color-text)] space-y-1"
+                              style={{
+                                backgroundColor: 'var(--color-warn-bg)',
+                                borderColor: 'var(--color-warn-border)',
+                              }}
+                            >
+                              <p>
+                                {item.errorMessage ||
+                                  'Hết hạn mức gọi AI hiện tại — đang hiển thị giải thích cục bộ.'}
+                              </p>
+                              <Link
+                                to="/profile#ai-settings"
+                                onClick={() => setOpen(false)}
+                                className="inline-block font-semibold text-[var(--color-primary)] hover:underline"
+                              >
+                                Mở Cấu hình AI →
+                              </Link>
+                            </div>
+                          )}
+                          {!item.quotaExhausted && item.errorMessage && (
                             <p className="text-[11px] text-[var(--color-gold)]">
                               {item.errorMessage}
                             </p>
@@ -499,13 +604,22 @@ export function QuickDictionarySuite() {
                         </div>
                       ) : (
                         <div
-                          className="rounded-xl border p-2.5 text-[11.5px] leading-relaxed text-[var(--color-text)]"
+                          className="rounded-xl border p-2.5 text-[11.5px] leading-relaxed text-[var(--color-text)] space-y-1.5"
                           style={{
                             backgroundColor: 'var(--color-warn-bg)',
                             borderColor: 'var(--color-warn-border)',
                           }}
                         >
-                          {item.errorMessage || 'Không tìm thấy giải thích cho từ này.'}
+                          <p>{item.errorMessage || 'Không tìm thấy giải thích cho từ này.'}</p>
+                          {item.quotaExhausted && (
+                            <Link
+                              to="/profile#ai-settings"
+                              onClick={() => setOpen(false)}
+                              className="inline-block font-semibold text-[var(--color-primary)] hover:underline"
+                            >
+                              Đổi model / Kiểm tra kết nối AI →
+                            </Link>
+                          )}
                         </div>
                       )}
                     </div>

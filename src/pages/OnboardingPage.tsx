@@ -2,26 +2,35 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
-  Atom,
-  BookOpen,
   Check,
-  Globe,
-  Palette,
+  Compass,
+  Feather,
+  Landmark,
+  Languages,
+  Layers,
   Scale,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { BrandLogo } from '../components/brand/BrandLogo';
 import { useToast } from '../components/ui/ToastProvider';
+import { DEFAULT_LIBRARY_CATEGORIES } from '../content/library/categories';
 import { useApp } from '../lib/AppContext';
 import { Link, useRouter, useSearchParams } from '../lib/router';
 
-const INTEREST_OPTIONS = [
-  { id: 'Ngữ văn', label: 'Ngữ văn & Văn học', icon: BookOpen },
-  { id: 'Triết học và tư tưởng', label: 'Triết học & Tư tưởng', icon: Scale },
-  { id: 'Ngôn ngữ', label: 'Ngôn ngữ & Tư duy', icon: Atom },
-  { id: 'Văn hóa - xã hội', label: 'Lịch sử - Văn hóa - Xã hội', icon: Globe },
-  { id: 'Kỹ năng viết', label: 'Nghệ thuật & Kỹ năng viết', icon: Palette },
-];
+const CATEGORY_ICON_MAP = {
+  languages: Languages,
+  feather: Feather,
+  landmark: Landmark,
+  scale: Scale,
+  compass: Compass,
+  layers: Layers,
+} as const;
+
+const INTEREST_OPTIONS = DEFAULT_LIBRARY_CATEGORIES.map((cat) => ({
+  id: cat.name,
+  label: cat.name,
+  icon: CATEGORY_ICON_MAP[cat.iconKey],
+}));
 
 const GOAL_OPTIONS = [
   'Rèn cấu trúc lập luận mạch lạc và đặt câu hỏi sắc nét',
@@ -201,8 +210,8 @@ export function OnboardingPage() {
                     Chọn 1 hoặc nhiều lĩnh vực để cá nhân hóa gợi ý học liệu.
                   </p>
 
-                  {/* 5 Field Cards with Large Centered Icons (3 top + 2 bottom centered on sm+) */}
-                  <div className="mt-8 flex flex-wrap justify-center gap-4">
+                  {/* 6 Canonical Discipline Cards */}
+                  <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 gap-4">
                     {INTEREST_OPTIONS.map((opt) => {
                       const Icon = opt.icon;
                       const selected = interests.includes(opt.id);
@@ -212,7 +221,7 @@ export function OnboardingPage() {
                           type="button"
                           onClick={() => toggleInterest(opt.id)}
                           aria-pressed={selected}
-                          className={`relative w-[calc(50%-0.5rem)] sm:w-[calc(33.333%-0.75rem)] min-h-[144px] flex flex-col items-center justify-center gap-3.5 rounded-2xl p-5 border text-center transition-all duration-200 ${
+                          className={`relative min-h-[144px] flex flex-col items-center justify-center gap-3.5 rounded-2xl p-5 border text-center transition-all duration-200 ${
                             selected
                               ? 'border-[var(--color-primary)] ring-1 ring-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_8%,var(--color-surface)_92%)]'
                               : 'border-[var(--color-border)] bg-[var(--color-bg)]/55 hover:border-[var(--color-primary)]/50 hover:bg-[var(--color-surface)]'

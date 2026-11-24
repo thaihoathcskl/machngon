@@ -62,6 +62,7 @@ export function LibrarySearch({
             aria-hidden="true"
           />
           <input
+            id="library-search-input"
             type="search"
             value={query}
             onFocus={() => setIsOpen(true)}
@@ -69,7 +70,7 @@ export function LibrarySearch({
               onQueryChange(e.target.value);
               setIsOpen(true);
             }}
-            placeholder="Bạn muốn khám phá điều gì hôm nay? (VD: tự do, ngôn ngữ, ngụy biện, Socrates...)"
+            placeholder="Bạn muốn khám phá điều gì hôm nay? (VD: tự do, ngôn ngữ, ngụy biện, Socrates...) — nhấn / để tìm nhanh"
             aria-label="Tìm kiếm tài liệu, khái niệm hoặc tác giả trong thư viện"
             className="w-full rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-bg)] pl-12 pr-11 py-3.5 text-sm sm:text-base text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
           />

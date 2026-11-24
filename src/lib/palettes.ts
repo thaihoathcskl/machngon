@@ -22,7 +22,7 @@ export const THEME_PRESETS: Record<PresetId, ThemePreset> = {
     subtitle: 'Kem ngà · Đỏ rượu · Vàng đồng cổ điển',
     atmosphere: 'Thư viện cổ điển, giá sách gỗ sồi, ánh sáng kem ngà và sắc đỏ rượu trầm ấm.',
     mode: 'light',
-    heroImage: '/src/assets/images/hero_van_hien_1795223386896.jpg',
+    heroImage: '/assets/images/hero_van_hien.jpg',
     heroAlt: 'Thư viện cổ điển Văn Hiến với giá sách gỗ sồi và ánh sáng vàng ấm',
     swatches: ['#F7F2E9', '#342D28', '#783E47', '#B99A62', '#DFD4C3'],
     tokens: {
@@ -44,7 +44,7 @@ export const THEME_PRESETS: Record<PresetId, ThemePreset> = {
     subtitle: 'Trắng biên tập · Xanh mực',
     atmosphere: 'Thư phòng tối giản hiện đại, ánh sáng trắng tinh gọn.',
     mode: 'light',
-    heroImage: '/src/assets/images/hero_tan_bien_tap_1795223391644.jpg',
+    heroImage: '/assets/images/hero_tan_bien_tap.jpg',
     heroAlt: 'Thư phòng tối giản Tân Biên Tập với ánh sáng tự nhiên tinh gọn',
     tokens: {
       bg: '#F8F9FA',
@@ -65,7 +65,7 @@ export const THEME_PRESETS: Record<PresetId, ThemePreset> = {
     subtitle: 'Tím huyền ảo · Hồng pastel · Kem ngà · Đỏ rượu',
     atmosphere: 'Thư viện đêm ánh sao huyền ảo, sắc tím mộng mơ kết hợp hồng pastel dịu mắt.',
     mode: 'dark',
-    heroImage: '/src/assets/images/hero_da_thu_1795223388848.jpg',
+    heroImage: '/assets/images/hero_da_thu.jpg',
     heroAlt: 'Thư viện đêm Tinh Mộng với sắc tím huyền ảo, ánh sao dịu và hồng pastel',
     swatches: ['#7358B8', '#EBB8D2', '#F7F2E9', '#C0BACD', '#7A324E'],
     tokens: {
@@ -87,7 +87,7 @@ export const THEME_PRESETS: Record<PresetId, ThemePreset> = {
     subtitle: 'Giấy lục nhạt · Xanh rừng',
     atmosphere: 'Góc đọc sách bên cửa sổ ngập sáng tự nhiên và sắc xanh cây cỏ.',
     mode: 'light',
-    heroImage: '/src/assets/images/hero_luc_ban_1795223386407.jpg',
+    heroImage: '/assets/images/hero_luc_ban.jpg',
     heroAlt: 'Góc đọc sách Lục Bản bên khung cửa sổ ngập sắc xanh cây cỏ',
     tokens: {
       bg: '#F5F8F5',

@@ -6,20 +6,28 @@ import { normalizeCategoryName } from './library/validation';
 import {
   LayoutPreferences,
   LIBRARY_FONT_SCALE_MAP,
+  loadActiveJourneyId,
+  loadCompletedDocIds,
   loadCustomAdminDocs,
   loadCustomCategories,
   loadCustomCollections,
   loadLabSessions,
   loadLayoutPrefs,
+  loadOpenedDocIds,
   loadReadingNotes,
+  loadRubricScores,
   loadSavedDocIds,
   loadUserProfile,
+  saveActiveJourneyId,
+  saveCompletedDocIds,
   saveCustomAdminDocs,
   saveCustomCategories,
   saveCustomCollections,
   saveLabSessions,
   saveLayoutPrefs,
+  saveOpenedDocIds,
   saveReadingNotes,
+  saveRubricScores,
   saveSavedDocIds,
   saveUserProfile,
 } from './storage';
@@ -29,8 +37,29 @@ import {
   LibraryCollection,
   LibraryDocument,
   ReadingNote,
+  RubricScoreEntry,
   UserProfile,
 } from './types';
+
+const LEGACY_V1_COLLECTION_IDS = new Set([
+  'nhap-mon-tu-duy-phan-bien',
+  'ngon-ngu-dien-ngon-va-y-nghia',
+  'doi-thoai-triet-hoc-va-tu-do',
+  'doc-sau-van-hoc-va-ly-luan',
+  'cong-dan-tri-thuc-trong-ky-nguyen-so',
+]);
+
+function resolveInitialCollections(): LibraryCollection[] {
+  const stored = loadCustomCollections();
+  if (
+    !stored ||
+    stored.length === 0 ||
+    (stored.length <= 5 && stored.every((c) => LEGACY_V1_COLLECTION_IDS.has(c.id)))
+  ) {
+    return DEFAULT_LIBRARY_COLLECTIONS;
+  }
+  return stored;
+}
 
 interface AppContextValue {
   user: UserProfile;
@@ -60,6 +89,19 @@ interface AppContextValue {
   savedDocIds: string[];
   toggleSavedDoc: (id: string) => void;
 
+  completedDocIds: string[];
+  toggleCompletedDoc: (id: string) => void;
+  markDocCompleted: (id: string) => void;
+
+  openedDocIds: string[];
+  markDocOpened: (id: string) => void;
+
+  activeJourneyId: string;
+  setActiveJourneyId: (id: string) => void;
+
+  rubricScores: RubricScoreEntry[];
+  addRubricScore: (entry: Omit<RubricScoreEntry, 'id' | 'timestamp'>) => void;
+
   notes: ReadingNote[];
   addReadingNote: (
     documentId: string,
@@ -88,9 +130,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     () => loadCustomCategories() ?? DEFAULT_LIBRARY_CATEGORIES
   );
   const [collections, setCollections] = useState<LibraryCollection[]>(
-    () => loadCustomCollections() ?? DEFAULT_LIBRARY_COLLECTIONS
+    () => resolveInitialCollections()
   );
   const [savedDocIds, setSavedDocIds] = useState<string[]>(() => loadSavedDocIds());
+  const [completedDocIds, setCompletedDocIds] = useState<string[]>(() => loadCompletedDocIds());
+  const [openedDocIds, setOpenedDocIds] = useState<string[]>(() => loadOpenedDocIds());
+  const [activeJourneyId, setActiveJourneyIdState] = useState<string>(() => loadActiveJourneyId());
+  const [rubricScores, setRubricScores] = useState<RubricScoreEntry[]>(() => loadRubricScores());
   const [notes, setNotes] = useState<ReadingNote[]>(() => loadReadingNotes());
   const [sessions, setSessions] = useState<LabSession[]>(() => loadLabSessions());
   const [layoutPrefs, setLayoutPrefs] = useState<LayoutPreferences>(() => loadLayoutPrefs());
@@ -118,6 +164,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => saveCustomCategories(categories), [categories]);
   useEffect(() => saveCustomCollections(collections), [collections]);
   useEffect(() => saveSavedDocIds(savedDocIds), [savedDocIds]);
+  useEffect(() => saveCompletedDocIds(completedDocIds), [completedDocIds]);
+  useEffect(() => saveOpenedDocIds(openedDocIds), [openedDocIds]);
+  useEffect(() => saveActiveJourneyId(activeJourneyId), [activeJourneyId]);
+  useEffect(() => saveRubricScores(rubricScores), [rubricScores]);
   useEffect(() => saveReadingNotes(notes), [notes]);
   useEffect(() => saveLabSessions(sessions), [sessions]);
   useEffect(() => {
@@ -284,6 +334,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
   }, []);
 
+  const toggleCompletedDoc = useCallback((id: string) => {
+    setCompletedDocIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [id, ...prev]
+    );
+  }, []);
+
+  const markDocCompleted = useCallback((id: string) => {
+    setCompletedDocIds((prev) => (prev.includes(id) ? prev : [id, ...prev]));
+  }, []);
+
+  const markDocOpened = useCallback((id: string) => {
+    setOpenedDocIds((prev) => {
+      if (prev[0] === id) return prev;
+      return [id, ...prev.filter((item) => item !== id)].slice(0, 120);
+    });
+  }, []);
+
+  const setActiveJourneyId = useCallback((id: string) => {
+    setActiveJourneyIdState((prev) => (prev === id ? '' : id));
+  }, []);
+
+  const addRubricScore = useCallback((entry: Omit<RubricScoreEntry, 'id' | 'timestamp'>) => {
+    const fullEntry: RubricScoreEntry = {
+      ...entry,
+      id: `rubric_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: Date.now(),
+    };
+    setRubricScores((prev) => [fullEntry, ...prev].slice(0, 120));
+  }, []);
+
   const addReadingNote = useCallback(
     (
       documentId: string,
@@ -368,6 +448,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         deleteCollection,
         savedDocIds,
         toggleSavedDoc,
+        completedDocIds,
+        toggleCompletedDoc,
+        markDocCompleted,
+        openedDocIds,
+        markDocOpened,
+        activeJourneyId,
+        setActiveJourneyId,
+        rubricScores,
+        addRubricScore,
         notes,
         addReadingNote,
         updateReadingNote,

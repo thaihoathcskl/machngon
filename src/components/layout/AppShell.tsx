@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import {
+  BookMarked,
   BookOpen,
   Compass,
   FileEdit,
   History,
   Home,
+  Keyboard,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -32,6 +34,7 @@ const WORKSPACE_NAV: NavItem[] = [
   { to: '/', label: 'Trang chủ', icon: Home, group: 'primary' },
   { to: '/dashboard', label: 'Tổng quan', icon: LayoutDashboard, group: 'primary' },
   { to: '/library', label: 'AI Library', icon: BookOpen, matchPrefix: true, group: 'primary' },
+  { to: '/glossary', label: 'Thuật ngữ', icon: BookMarked, group: 'primary' },
   { to: '/lab', label: 'AI Labs', icon: MessageSquareText, matchPrefix: true, group: 'primary' },
   { to: '/guide', label: 'Hướng dẫn', icon: Compass, group: 'personal' },
   { to: '/history', label: 'Lịch sử', icon: History, group: 'personal' },
@@ -48,7 +51,7 @@ const MOBILE_BOTTOM_NAV: NavItem[] = [
 
 export function PublicHeader() {
   const { user, signOut } = useApp();
-  const { pathname, navigate } = useRouter();
+  const { navigate } = useRouter();
   const { setPaletteModalOpen } = useTheme();
   const { showToast } = useToast();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -58,18 +61,6 @@ export function PublicHeader() {
     signOut();
     showToast('Bạn đã đăng xuất khỏi Mạch Ngôn.', { variant: 'info' });
     navigate('/');
-  };
-
-  const handleAnchorNav = (sectionId: string, fallbackRoute: string) => {
-    setMobileMenuOpen(false);
-    if (pathname === '/') {
-      const target = document.getElementById(sectionId);
-      if (target) {
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        return;
-      }
-    }
-    navigate(fallbackRoute);
   };
 
   return (
@@ -83,15 +74,14 @@ export function PublicHeader() {
         {/* Zone 2: 4 Centered Navigation Links */}
         <nav
           aria-label="Điều hướng chính"
-          className="hidden md:flex items-center gap-8 text-sm font-medium text-[var(--color-text-muted)]"
+          className="hidden md:flex items-center gap-5 lg:gap-8 text-sm font-medium text-[var(--color-text-muted)]"
         >
-          <button
-            type="button"
-            onClick={() => handleAnchorNav('cach-thuc-hoat-dong', '/')}
-            className="py-1 hover:text-[var(--color-primary)] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          <Link
+            to="/about"
+            className="py-1 hover:text-[var(--color-primary)] transition-colors whitespace-nowrap shrink-0"
           >
             Giới thiệu
-          </button>
+          </Link>
           <Link
             to="/library"
             className="py-1 hover:text-[var(--color-primary)] transition-colors whitespace-nowrap shrink-0"
@@ -104,13 +94,12 @@ export function PublicHeader() {
           >
             AI Labs
           </Link>
-          <button
-            type="button"
-            onClick={() => handleAnchorNav('ve-du-an', '/guide')}
-            className="py-1 hover:text-[var(--color-primary)] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          <Link
+            to="/guide"
+            className="py-1 hover:text-[var(--color-primary)] transition-colors whitespace-nowrap shrink-0"
           >
-            Về dự án
-          </button>
+            Hướng dẫn
+          </Link>
         </nav>
 
         {/* Zone 3: Right Actions — Auth-aware */}
@@ -122,9 +111,18 @@ export function PublicHeader() {
           {user.isAuthenticated ? (
             <>
               <Link
+                to="/dashboard"
+                className="hidden sm:inline-flex btn-primary !min-h-10 !px-3.5 !text-sm"
+              >
+                <LayoutDashboard className="h-4 w-4 shrink-0" />
+                <span className="hidden xl:inline">Vào không gian học tập</span>
+                <span className="xl:hidden">Tổng quan</span>
+              </Link>
+              <Link
                 to="/profile"
                 title={`Hồ sơ: ${user.name}`}
-                className="hidden lg:inline-flex items-center gap-2 rounded-xl px-2.5 py-1.5 border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-primary)]/45 transition-colors max-w-[190px]"
+                data-testid="header-account-link"
+                className="hidden sm:inline-flex items-center gap-2 rounded-xl px-2.5 py-1.5 border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-primary)]/45 transition-colors max-w-[190px]"
               >
                 <span
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full font-display text-xs font-semibold border border-[var(--color-border)]"
@@ -140,23 +138,6 @@ export function PublicHeader() {
                   {user.name}
                 </span>
               </Link>
-              <Link
-                to="/dashboard"
-                className="hidden sm:inline-flex btn-primary !min-h-10 !px-3.5 !text-sm"
-              >
-                <LayoutDashboard className="h-4 w-4 shrink-0" />
-                <span className="hidden xl:inline">Vào không gian học tập</span>
-                <span className="xl:hidden">Tổng quan</span>
-              </Link>
-              <button
-                type="button"
-                onClick={handleSignOut}
-                aria-label="Đăng xuất"
-                className="hidden sm:inline-flex btn-secondary !min-h-10 !px-3 !text-sm"
-              >
-                <LogOut className="h-4 w-4 shrink-0" />
-                <span className="hidden md:inline">Đăng xuất</span>
-              </button>
             </>
           ) : (
             <>
@@ -167,7 +148,7 @@ export function PublicHeader() {
                 Đăng nhập
               </Link>
               <Link
-                to="/auth?mode=register&redirect=%2Fonboarding"
+                to="/library"
                 className="hidden sm:inline-flex btn-primary !min-h-10 !px-4 !text-sm"
               >
                 Bắt đầu
@@ -196,13 +177,13 @@ export function PublicHeader() {
             className="md:hidden overflow-hidden border-t border-[var(--color-border)] bg-[var(--color-surface)] px-5 py-3"
           >
             <div className="flex flex-col gap-1">
-              <button
-                type="button"
-                onClick={() => handleAnchorNav('cach-thuc-hoat-dong', '/')}
-                className="rounded-lg px-3 py-3 text-left text-sm font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-muted)]"
+              <Link
+                to="/about"
+                onClick={() => setMobileMenuOpen(false)}
+                className="rounded-lg px-3 py-3 text-sm font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-muted)]"
               >
-                Giới thiệu
-              </button>
+                Giới thiệu & Về dự án
+              </Link>
               <Link
                 to="/library"
                 onClick={() => setMobileMenuOpen(false)}
@@ -217,13 +198,13 @@ export function PublicHeader() {
               >
                 AI Labs
               </Link>
-              <button
-                type="button"
-                onClick={() => handleAnchorNav('ve-du-an', '/guide')}
-                className="rounded-lg px-3 py-3 text-left text-sm font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-muted)]"
+              <Link
+                to="/guide"
+                onClick={() => setMobileMenuOpen(false)}
+                className="rounded-lg px-3 py-3 text-sm font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-muted)]"
               >
-                Về dự án
-              </button>
+                Hướng dẫn đọc & tranh biện
+              </Link>
               <button
                 type="button"
                 onClick={() => {
@@ -290,7 +271,7 @@ export function PublicHeader() {
                       Đăng nhập
                     </Link>
                     <Link
-                      to="/auth?mode=register&redirect=%2Fonboarding"
+                      to="/library"
                       onClick={() => setMobileMenuOpen(false)}
                       className="btn-primary min-h-11 text-sm"
                     >
@@ -325,7 +306,7 @@ export function WorkspaceShell({
   noMainBottomPadding = false,
 }: WorkspaceShellProps) {
   const { pathname, navigate } = useRouter();
-  const { user, signOut } = useApp();
+  const { user, signOut, adminSessionToken } = useApp();
   const { activePreset, setPaletteModalOpen } = useTheme();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -337,14 +318,17 @@ export function WorkspaceShell({
   };
 
   if (hideChrome) {
-    return <div className="min-h-dvh bg-[var(--color-bg)]">{children}</div>;
+    return <div className="min-h-dvh bg-[var(--color-bg)] overflow-x-clip">{children}</div>;
   }
 
-  const primaryNav = WORKSPACE_NAV.filter((n) => n.group === 'primary');
-  const personalNav = WORKSPACE_NAV.filter((n) => n.group === 'personal');
+  const visibleWorkspaceNav = WORKSPACE_NAV.filter((n) =>
+    n.to === '/admin' ? Boolean(adminSessionToken) : true
+  );
+  const primaryNav = visibleWorkspaceNav.filter((n) => n.group === 'primary');
+  const personalNav = visibleWorkspaceNav.filter((n) => n.group === 'personal');
 
   return (
-    <div className="min-h-dvh bg-[var(--color-bg)] text-[var(--color-text)] flex flex-col lg:flex-row">
+    <div className="min-h-dvh bg-[var(--color-bg)] text-[var(--color-text)] flex flex-col lg:flex-row overflow-x-clip max-w-full">
       {/* Desktop Wide (>=1440px): Full 244px Sidebar | Laptop (1024px–1439px): 68px Icon Rail */}
       <aside
         aria-label="Thanh điều hướng thư phòng"
@@ -457,6 +441,17 @@ export function WorkspaceShell({
             </span>
           </button>
 
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('machngon:open-shortcuts'))}
+            title="Phím tắt (?)"
+            aria-label="Phím tắt bàn phím"
+            className="flex w-full items-center justify-center wide:justify-start gap-3 rounded-xl h-9 px-2.5 wide:px-3 text-xs font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-surface-muted)] hover:text-[var(--color-text)] transition-colors cursor-pointer"
+          >
+            <Keyboard className="h-4 w-4 shrink-0" />
+            <span className="hidden wide:inline truncate">Phím tắt (?)</span>
+          </button>
+
           {user.isAuthenticated && (
             <button
               type="button"
@@ -548,7 +543,7 @@ export function WorkspaceShell({
               </div>
 
               <nav className="flex-1 overflow-y-auto p-3 space-y-1">
-                {WORKSPACE_NAV.map((item) => {
+                {visibleWorkspaceNav.map((item) => {
                   const Icon = item.icon;
                   const active = isNavActive(item);
                   return (

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTheme } from '../theme/ThemeProvider';
 
-export const OFFICIAL_BRAND_LOGO_SRC = '/assets/brand/mach-ngon-logo.png';
+export const OFFICIAL_BRAND_LOGO_SRC = '/assets/images/logo.png';
 
 interface BrandLogoProps {
   /** Visual size preset maintaining strict 1:1 aspect ratio without stretching */
